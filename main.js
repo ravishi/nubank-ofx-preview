@@ -7,8 +7,6 @@ import * as chromeDriver from 'selenium-webdriver/chrome';
 
 const info = pkginfo(module, 'version');
 
-moment.locale('pt-br');
-
 const defaultOutputFile = `./nubank-${moment().add(1, 'months').format('MM')}.ofx`;
 
 program
@@ -56,9 +54,14 @@ driver
         console.log('Generating ofx...');
         return charges;
     })
-    .then(charges => generateOfx(charges))
+    .then(charges => {
+        const locale = driver.executeScript('return window.navigator.userLanguage || window.navigator.language;');
+        const timezoneOffset = driver.executeScript('return new Date().getTimezoneOffset();');
+        return Promise.all([Promise.resolve(charges), locale, timezoneOffset]);
+    })
+    .then(([charges, locale, timezoneOffset]) => generateOfx(charges, {locale, timezoneOffset}))
     .then(ofx => writeToFile(ofx, (program.path || defaultOutputFile)))
-    .then(() => console.log('Done!'))
+    .then(() => console.log(`Done! OFX file saved to ${program.path || defaultOutputFile}`))
     .catch(err => console.log(err))
     .then(() => driver.quit());
 
@@ -82,7 +85,12 @@ function writeToFile(s, path) {
     });
 }
 
-function generateOfx(charges) {
+function generateOfx(charges, {locale, timezoneOffset}) {
+    const tz = (timezoneOffset / 60) * (-1);
+
+    // XXX NuBank ignores browser locale, uses pt-BR
+    moment.locale('pt-BR');
+
     return `
 OFXHEADER:100
 DATA:OFXSGML
@@ -102,7 +110,6 @@ NEWFILEUID:NONE
 <SEVERITY>INFO
 </STATUS>
 
-<DTSERVER>20170703000000[-3:GMT]
 <LANGUAGE>POR
 </SONRS>
 </SIGNONMSGSRSV1>
@@ -122,21 +129,17 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-<DTSTART>20161208000000[-3:GMT]
-<DTEND>20170108000000[-3:GMT]
-
 ${charges.map(c => {
         const type = c.amount.indexOf('-') !== 0 ? 'DEBIT' : 'CREDIT';
         const amount = `${type === 'DEBIT' ? '-' : ''}${c.amount.replace(/^-/, '').replace(/,/g, '.')}`;
         return `
 <STMTTRN>
 <TRNTYPE>${type}
-<DTPOSTED>${moment(c.date, 'DD MMM').year(moment().year()).format('YYYYMMDD')}000000[-3:GMT]
+<DTPOSTED>${moment(c.date, 'DD MMM').year(moment().year()).format('YYYYMMDD')}000000[${tz}:GMT]
 <TRNAMT>${amount}
 <MEMO>${c.desc}
 </STMTTRN>
 `}).join('\n')}
-
 </BANKTRANLIST>
 
 </CCSTMTRS>
