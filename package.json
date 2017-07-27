@@ -1,0 +1,30 @@
+{
+  "name": "nubank-ofx-preview",
+  "version": "0.1.0",
+  "description": "",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "babel-node main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/ravishi/nubank-ofx-preview.git"
+  },
+  "author": "Dirley Rodrigues <dirley@romenor.net>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ravishi/nubank-ofx-preview/issues"
+  },
+  "homepage": "https://github.com/ravishi/nubank-ofx-preview#readme",
+  "devDependencies": {
+    "babel-cli": "^6.24.1",
+    "babel-preset-env": "^1.6.0"
+  },
+  "dependencies": {
+    "commander": "^2.11.0",
+    "moment": "^2.18.1",
+    "pkginfo": "^0.4.0",
+    "selenium-webdriver": "^3.5.0"
+  }
+}
