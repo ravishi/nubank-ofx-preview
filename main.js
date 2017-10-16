@@ -25,7 +25,7 @@ if (!program.username || !program.password) {
 }
 
 const options = new chromeDriver.Options()
-    //.headless()
+    .headless()
     .windowSize({width: 1200, height: 600})
     .setChromeBinaryPath(program.chromePath);
 
