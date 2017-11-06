@@ -3,8 +3,7 @@ import path from 'path';
 import moment from 'moment';
 import pkginfo from 'pkginfo';
 import program from 'commander';
-import * as webdriver from 'selenium-webdriver';
-import * as chromeDriver from 'selenium-webdriver/chrome';
+import puppeteer from 'puppeteer';
 
 const info = pkginfo(module, 'version');
 
@@ -24,89 +23,92 @@ if (!program.username || !program.password) {
     process.exit(1);
 }
 
-const options = new chromeDriver.Options()
-    .headless()
-    .windowSize({width: 1200, height: 600})
-    .setChromeBinaryPath(program.chromePath);
-
-const driver = new webdriver.Builder()
-    .forBrowser('chrome')
-    .setChromeOptions(options)
-    .build();
-
-const {By, until} = webdriver;
-const waitTimeout = (program.timeout || 10) * 1000;
-
 const outputPath = (
     program.output
         ? path.join(process.cwd(), program.output)
         : defaultOutputFile
 );
 
-driver
-    .then(() => console.log('Accessing...'))
-    .then(() => driver.get('https://conta.nubank.com.br/'))
-    .then(() => waitElementReady(By.id('username')))
-    .then(() => driver.wait(until.elementLocated(By.css('div#loaderDiv')), waitTimeout))
-    .then(loader => driver.wait(until.elementIsNotVisible(loader), waitTimeout))
-    .then(() => console.log('Logging in...'))
-    .then(() => driver.findElement(By.id('username')))
-    .then(input => input.sendKeys(program.username))
-    .then(() => driver.findElement(By.css('form input[type="password"]')).sendKeys(program.password))
-    .then(() => driver.findElement(By.css('form button[type="submit"]')).click())
-    .then(() => driver.wait(until.titleContains('Histórico'), waitTimeout))
-    .then(() => driver.wait(until.elementLocated(By.css('div#loaderDiv')), waitTimeout))
-    .then(loader => driver.wait(until.elementIsNotVisible(loader), waitTimeout))
-    .then(() => console.log('Loading bills...'))
-    .then(() => driver.findElement(By.css('li a.menu-item.bills')).click())
-    .then(() => driver.wait(until.elementLocated(By.css('div#loaderDiv')), waitTimeout))
-    .then(loader => driver.wait(until.elementIsNotVisible(loader), waitTimeout * 4))
-    .then(() => driver.findElement(By.xpath("//div[@class='md-header-items']/md-tab[last()]")).click())
-    .then(() => console.log('Parsing charges...'))
-    .then(() => driver.findElements(By.css('div.charges-list div.charge')))
-    .then(charges => charges.map(parseCharge))
-    .then(charges => Promise.all(charges))
-    .then(charges => {
-        console.log('Generating ofx...');
-        return charges;
-    })
-    .then(charges => {
-        const locale = driver.executeScript('return window.navigator.userLanguage || window.navigator.language;');
-        const timezoneOffset = driver.executeScript('return new Date().getTimezoneOffset();');
-        return Promise.all([Promise.resolve(charges), locale, timezoneOffset]);
-    })
-    .then(([charges, locale, timezoneOffset]) => generateOfx(charges, {locale, timezoneOffset}))
-    .then(ofx => writeToFile(ofx, outputPath))
-    .then(() => console.log(`Done! OFX file saved to ${outputPath}`))
-    .catch(err => {
-        console.log(err);
-        return {error: err};
-    })
-    .then(({error} = {}) => driver.quit().then(() => process.exit(error ? 1 : 0)));
+puppeteer.launch({headless: true})
+    .then(async browser => {
+        try {
+            const page = await browser.newPage();
 
-function waitElementReady(by, timeout = waitTimeout, retry = 0) {
-    return driver.findElement(by)
-        .catch(err => {
-            if (retry <= 3) {
-                if (err instanceof webdriver.error.NoSuchElementError) {
-                    return driver.wait(until.elementLocated(by), timeout)
-                        .then(el => waitElementReady(by, timeout, retry + 1));
-                } else if (err instanceof webdriver.error.ElementNotVisibleError) {
-                    return driver.wait(until.elementIsVisible(by), timeout)
-                        .then(el => waitElementReady(by, timeout, retry + 1));
-                }
+            const [bill, _] = await Promise.all([
+                waitForBillData(page),
+                navigateToBillsPage(page)
+            ]);
+
+            return bill;
+        } finally {
+            await browser.close();
+        }
+    })
+    .then(bill => {
+        console.log('Generating OFX...');
+        return generateOfx(bill.line_items);
+    })
+    .then((ofx) => writeToFile(ofx, outputPath))
+    .then(() => console.log(`Done! OFX file saved to ${outputPath}.`));
+
+function waitForBillData(page) {
+    return new Promise((resolve, reject) => {
+        const onResponse = response => {
+            const contentType = response.headers['content-type'];
+            if ((contentType || '').startsWith('application/json')) {
+                return response.json().then(body => {
+                    if (body && body.bill && body.bill.state === 'open') {
+                        resolve(body.bill);
+                    }
+                    return response;
+                });
             }
-            throw err;
-        })
-        .then(el => driver.wait(until.elementIsVisible(el, timeout)));
+            return response;
+        };
+
+        const onError = error => {
+            page.off('error', onError);
+            page.off('response', onResponse);
+            reject(error);
+        };
+
+        page.on('error', onError);
+        page.on('response', onResponse);
+    });
 }
 
-function parseCharge(el) {
-    const date = el.findElement(By.css('div.time')).getText();
-    const desc = el.findElement(By.css('div.charge-data div.description')).getText();
-    const amount = el.findElement(By.css('div.charge-data div.amount')).getText();
-    return Promise.all([date, desc, amount])
-        .then(([date, desc, amount]) => ({date, desc, amount}));
+async function navigateToBillsPage(page) {
+    console.log('Logging in...');
+
+    await page.goto('https://conta.nubank.com.br/', {waitUntil: 'networkidle'});
+
+    await page.waitForSelector('#username', {visible: true});
+    await page.waitForSelector('form input[type="password"]', {visible: true});
+
+    const username = await page.$('#username');
+    await username.focus();
+    await username.type(program.username, {delay: 100});
+
+    const password = await page.$('form input[type="password"]');
+    await password.focus();
+    await password.type(program.password, {delay: 100});
+
+    const submit = await page.$('form button[type="submit"]');
+
+    await Promise.all([
+        page.waitForNavigation({waitUntil: 'networkidle'}),
+        submit.click()
+    ]);
+
+    console.log('Fetching bills...');
+
+    const billsButtonSelector = 'li a.menu-item.bills';
+
+    await page.waitForSelector(billsButtonSelector);
+
+    const billsButton = await page.$(billsButtonSelector);
+
+    return await billsButton.click();
 }
 
 function writeToFile(s, path) {
@@ -115,17 +117,14 @@ function writeToFile(s, path) {
             if (err) {
                 reject(err);
             } else {
-                resolve(err);
+                resolve();
             }
         });
     });
 }
 
-function generateOfx(charges, {locale, timezoneOffset}) {
+function generateOfx(charges, {timezoneOffset = 180} = {}) {
     const tz = (timezoneOffset / 60) * (-1);
-
-    // XXX NuBank ignores browser locale, uses pt-BR
-    moment.locale('pt-BR');
 
     return `
 OFXHEADER:100
@@ -166,14 +165,14 @@ NEWFILEUID:NONE
 
 <BANKTRANLIST>
 ${charges.map(c => {
-        const type = c.amount.indexOf('-') !== 0 ? 'DEBIT' : 'CREDIT';
-        const amount = `${type === 'DEBIT' ? '-' : ''}${c.amount.replace(/^-/, '').replace(/,/g, '.')}`;
-        return `
+    const {id, title, amount, post_date: date} = c;
+    return `
 <STMTTRN>
-<TRNTYPE>${type}
-<DTPOSTED>${moment(c.date, 'DD MMM').year(moment().year()).format('YYYYMMDD')}000000[${tz}:GMT]
-<TRNAMT>${amount}
-<MEMO>${c.desc}
+<TRNTYPE>DEBIT
+<DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${tz}:GMT]
+<TRNAMT>${((-1) * amount / 100).toFixed(2)}
+<FITID>${id}</FITID>
+<MEMO>${title}
 </STMTTRN>
 `}).join('\n')}
 </BANKTRANLIST>

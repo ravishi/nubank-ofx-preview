@@ -25,6 +25,6 @@
     "commander": "^2.11.0",
     "moment": "^2.18.1",
     "pkginfo": "^0.4.0",
-    "selenium-webdriver": "^3.5.0"
+    "puppeteer": "^0.12.0"
   }
 }
