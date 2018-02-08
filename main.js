@@ -13,7 +13,6 @@ program
     .version(info.version)
     .option('-u, --username <str>', 'Username. Required.')
     .option('-p, --password <str>', 'Password. Required.')
-    .option('-c, --chrome-path <path>', 'Chrome binary path')
     .option('-t, --timeout <int>', 'Timeout, in seconds, while waiting for pages to load. Defaults to 10.')
     .option('-o, --output <path>', `Output file. Defaults to ${defaultOutputFile}`)
     .parse(process.argv);
@@ -27,6 +26,12 @@ const outputPath = (
     program.output
         ? path.join(process.cwd(), program.output)
         : defaultOutputFile
+);
+
+const configuredTimeout = (
+    program.timeout
+        ? program.timeout * 1000
+        : 10000
 );
 
 puppeteer.launch({headless: true})
@@ -80,10 +85,16 @@ function waitForBillData(page) {
 async function navigateToBillsPage(page) {
     console.log('Logging in...');
 
-    await page.goto('https://conta.nubank.com.br/', {waitUntil: 'networkidle'});
+    const navigationConfig = {
+        timeout: configuredTimeout,
+        waitUntil: 'networkidle',
+        networkIdleTimeout: 5000,
+    };
 
-    await page.waitForSelector('#username', {visible: true});
-    await page.waitForSelector('form input[type="password"]', {visible: true});
+    await page.goto('https://conta.nubank.com.br/', navigationConfig);
+
+    await page.waitForSelector('#username', {visible: true, timeout: configuredTimeout});
+    await page.waitForSelector('form input[type="password"]', {visible: true, timeout: configuredTimeout});
 
     const username = await page.$('#username');
     await username.focus();
@@ -95,16 +106,19 @@ async function navigateToBillsPage(page) {
 
     const submit = await page.$('form button[type="submit"]');
 
+    // XXX Why do we use all here? Couldn't we use two awaits?
     await Promise.all([
-        page.waitForNavigation({waitUntil: 'networkidle'}),
-        submit.click()
+        page.waitForNavigation(navigationConfig),
+        submit.click(),
     ]);
-
-    console.log('Fetching bills...');
 
     const billsButtonSelector = 'li a.menu-item.bills';
 
-    await page.waitForSelector(billsButtonSelector);
+    await page.waitForSelector(billsButtonSelector, {timeout: configuredTimeout});
+
+    // TODO Pick and return error from screen when login fails? :)
+
+    console.log('Fetching bills...');
 
     const billsButton = await page.$(billsButtonSelector);
 
