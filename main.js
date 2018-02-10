@@ -1,4 +1,5 @@
 import fs from 'fs';
+import sh from 'shorthash';
 import path from 'path';
 import moment from 'moment';
 import pkginfo from 'pkginfo';
@@ -11,6 +12,7 @@ const defaultOutputFile = `./nubank-${moment().add(1, 'months').format('YYYY-MM'
 
 program
     .version(info.version)
+    .option('--include-id', 'Include an unique ID in each transaction description.')
     .option('-u, --username <str>', 'Username. Required.')
     .option('-p, --password <str>', 'Password. Required.')
     .option('-t, --timeout <int>', 'Timeout, in seconds, while waiting for pages to load. Defaults to 10.')
@@ -51,7 +53,7 @@ puppeteer.launch({headless: true})
     })
     .then(bill => {
         console.log('Generating OFX...');
-        return generateOfx(bill.line_items);
+        return generateOfx(bill.line_items, {includeUid: !!program.includeId});
     })
     .then((ofx) => writeToFile(ofx, outputPath))
     .then(() => console.log(`Done! OFX file saved to ${outputPath}.`));
@@ -137,7 +139,7 @@ function writeToFile(s, path) {
     });
 }
 
-function generateOfx(charges, {timezoneOffset = 180} = {}) {
+function generateOfx(charges, {timezoneOffset = 180, includeUid = false} = {}) {
     const tz = (timezoneOffset / 60) * (-1);
 
     return `
@@ -178,15 +180,17 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-${charges.map(c => {
-    const {id, title, amount, post_date: date} = c;
+${charges.map(({id, title, amount, post_date: date}) => {
+    const memo = (
+        !includeUid ? title : `#${sh.unique(id)} - ${title}`
+    );
     return `
 <STMTTRN>
 <TRNTYPE>DEBIT
 <DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${tz}:GMT]
 <TRNAMT>${((-1) * amount / 100).toFixed(2)}
 <FITID>${id}</FITID>
-<MEMO>${title}
+<MEMO>${memo}</MEMO>
 </STMTTRN>
 `}).join('\n')}
 </BANKTRANLIST>
