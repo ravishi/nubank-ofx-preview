@@ -41,12 +41,13 @@ puppeteer.launch({headless: true})
         try {
             const page = await browser.newPage();
 
-            const [bill, _] = await Promise.all([
-                waitForBillData(page),
-                navigateToBillsPage(page)
-            ]);
+            console.log('Logging in...');
 
-            return bill;
+            await login(page, program.username, program.password);
+
+            console.log('Fetching bill...');
+
+            return await fetchLastBill(page);
         } finally {
             await browser.close();
         }
@@ -57,6 +58,52 @@ puppeteer.launch({headless: true})
     })
     .then((ofx) => writeToFile(ofx, outputPath))
     .then(() => console.log(`Done! OFX file saved to ${outputPath}.`));
+
+
+const baseUrl = 'https://conta.nubank.com.br';
+
+const navigationConfig = {
+    timeout: configuredTimeout,
+    waitUntil: 'networkidle',
+    networkIdleTimeout: 5000,
+};
+
+async function login(page, username, password) {
+    await page.goto(baseUrl, navigationConfig);
+
+    await page.waitForSelector('#username', {visible: true, timeout: configuredTimeout});
+    await page.waitForSelector('form input[type="password"]', {visible: true, timeout: configuredTimeout});
+
+    const usernameInput = await page.$('#username');
+    await usernameInput.focus();
+    await usernameInput.type(username, {delay: 100});
+
+    const passwordInput = await page.$('form input[type="password"]');
+    await passwordInput.focus();
+    await passwordInput.type(password, {delay: 100});
+
+    const submit = await page.$('form button[type="submit"]');
+
+    // XXX Why do we use all here? Couldn't we use two awaits?
+    await Promise.all([
+        page.waitForNavigation(navigationConfig),
+        submit.click(),
+    ]);
+
+    const billsButtonSelector = 'li a.menu-item.bills';
+
+    await page.waitForSelector(billsButtonSelector, {timeout: configuredTimeout});
+
+    return true;
+}
+
+async function fetchLastBill(page) {
+    const [bill, _ignoredResult] = await Promise.all([
+        waitForBillData(page),
+        page.goto(`${baseUrl}/#/bills`, navigationConfig),
+    ]);
+    return bill;
+}
 
 function waitForBillData(page) {
     return new Promise((resolve, reject) => {
@@ -82,49 +129,6 @@ function waitForBillData(page) {
         page.on('error', onError);
         page.on('response', onResponse);
     });
-}
-
-async function navigateToBillsPage(page) {
-    console.log('Logging in...');
-
-    const navigationConfig = {
-        timeout: configuredTimeout,
-        waitUntil: 'networkidle',
-        networkIdleTimeout: 5000,
-    };
-
-    await page.goto('https://conta.nubank.com.br/', navigationConfig);
-
-    await page.waitForSelector('#username', {visible: true, timeout: configuredTimeout});
-    await page.waitForSelector('form input[type="password"]', {visible: true, timeout: configuredTimeout});
-
-    const username = await page.$('#username');
-    await username.focus();
-    await username.type(program.username, {delay: 100});
-
-    const password = await page.$('form input[type="password"]');
-    await password.focus();
-    await password.type(program.password, {delay: 100});
-
-    const submit = await page.$('form button[type="submit"]');
-
-    // XXX Why do we use all here? Couldn't we use two awaits?
-    await Promise.all([
-        page.waitForNavigation(navigationConfig),
-        submit.click(),
-    ]);
-
-    const billsButtonSelector = 'li a.menu-item.bills';
-
-    await page.waitForSelector(billsButtonSelector, {timeout: configuredTimeout});
-
-    // TODO Pick and return error from screen when login fails? :)
-
-    console.log('Fetching bills...');
-
-    const billsButton = await page.$(billsButtonSelector);
-
-    return await billsButton.click();
 }
 
 function writeToFile(s, path) {
