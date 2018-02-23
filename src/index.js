@@ -15,7 +15,7 @@ program
     .option('--include-id', 'Include an unique ID in each transaction description.')
     .option('-u, --username <str>', 'Username. Required.')
     .option('-p, --password <str>', 'Password. Required.')
-    .option('-t, --timeout <int>', 'Timeout, in seconds, while waiting for pages to load. Defaults to 10.')
+    .option('-t, --timeout <int>', 'Timeout, in seconds, while waiting for pages to load. Defaults to 30.')
     .option('-o, --output <path>', `Output file. Defaults to ${defaultOutputFile}`)
     .parse(process.argv);
 
@@ -33,13 +33,15 @@ const outputPath = (
 const configuredTimeout = (
     program.timeout
         ? program.timeout * 1000
-        : 10000
+        : 30000
 );
 
-puppeteer.launch({headless: true})
+puppeteer.launch({headless: false})
     .then(async browser => {
         try {
             const page = await browser.newPage();
+
+            page.setDefaultNavigationTimeout(configuredTimeout);
 
             console.log('Logging in...');
 
@@ -62,14 +64,8 @@ puppeteer.launch({headless: true})
 
 const baseUrl = 'https://conta.nubank.com.br';
 
-const navigationConfig = {
-    timeout: configuredTimeout,
-    waitUntil: 'networkidle',
-    networkIdleTimeout: 5000,
-};
-
 async function login(page, username, password) {
-    await page.goto(baseUrl, navigationConfig);
+    await page.goto(baseUrl, {waitUntil: 'networkidle0'});
 
     await page.waitForSelector('#username', {visible: true, timeout: configuredTimeout});
     await page.waitForSelector('form input[type="password"]', {visible: true, timeout: configuredTimeout});
@@ -84,40 +80,44 @@ async function login(page, username, password) {
 
     const submit = await page.$('form button[type="submit"]');
 
-    // XXX Why do we use all here? Couldn't we use two awaits?
-    await Promise.all([
-        page.waitForNavigation(navigationConfig),
-        submit.click(),
-    ]);
+    // TODO: Create some kind of waitForNetworkIdle function and use it here.
+    // See: - https://github.com/GoogleChrome/puppeteer/issues/1412
+    //      - https://github.com/GoogleChrome/puppeteer/issues/1608
+    //
+    await submit.click();
 
+    // XXX For now, we are clicking and waiting for a selector. But that's pretty volatile, if you ask me.
     const billsButtonSelector = 'li a.menu-item.bills';
-
     await page.waitForSelector(billsButtonSelector, {timeout: configuredTimeout});
 
     return true;
 }
 
 async function fetchLastBill(page) {
+    // XXX We go to blank, then back to bills page in order to be able to wait for 'load'
+    // TODO In the future, we should have a waitForNetworkIdle kind of function to be used here.
+    await page.goto('about:blank', {waitUntil: 'load'});
+
     const [bill, _ignoredResult] = await Promise.all([
         waitForBillData(page),
-        page.goto(`${baseUrl}/#/bills`, navigationConfig),
+        page.goto(`${baseUrl}/#/bills`, {waitUntil: 'load'}),
     ]);
+
     return bill;
 }
 
 function waitForBillData(page) {
+    // TODO Maybe we could introduce a timeout here?
+    // TODO Maybe we could turn this into a helper, which receives a
+    // "filter/mapper" and either returns from that filter or times out
+    // if the filter doesnt pass.
     return new Promise((resolve, reject) => {
         const onResponse = response => {
-            const contentType = response.headers['content-type'];
-            if ((contentType || '').startsWith('application/json')) {
-                return response.json().then(body => {
-                    if (body && body.bill && body.bill.state === 'open') {
-                        resolve(body.bill);
-                    }
-                    return response;
-                });
-            }
-            return response;
+            response.json().catch(() => null).then(data => {
+                if (data && data.bill && data.bill.state === 'open') {
+                    resolve(data.bill);
+                }
+            });
         };
 
         const onError = error => {
