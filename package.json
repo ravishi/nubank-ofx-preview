@@ -17,13 +17,14 @@
   },
   "homepage": "https://github.com/ravishi/nubank-ofx-preview#readme",
   "devDependencies": {
-    "babel-cli": "^6.24.1",
-    "babel-preset-env": "^1.6.0"
+    "babel": "^6.23.0",
+    "babel-cli": "^6.26.0",
+    "babel-preset-env": "^1.6.1"
   },
   "dependencies": {
-    "commander": "^2.11.0",
-    "moment": "^2.18.1",
-    "pkginfo": "^0.4.0",
+    "commander": "^2.14.1",
+    "moment": "^2.20.1",
+    "pkginfo": "^0.4.1",
     "puppeteer": "^1.1.0",
     "shorthash": "0.0.2"
   }
