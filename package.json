@@ -2,9 +2,8 @@
   "name": "nubank-ofx-preview",
   "version": "0.1.0",
   "description": "",
-  "main": "dist/main.js",
   "scripts": {
-    "start": "babel-node main.js",
+    "start": "babel-node src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
