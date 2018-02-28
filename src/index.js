@@ -36,7 +36,7 @@ const configuredTimeout = (
         : 30000
 );
 
-puppeteer.launch({headless: false})
+puppeteer.launch({headless: true})
     .then(async browser => {
         try {
             const page = await browser.newPage();
