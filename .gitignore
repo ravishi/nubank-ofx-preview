@@ -1,4 +1,5 @@
 *.ofx
+nubank-*.json
 
 ### Node ###
 # Logs

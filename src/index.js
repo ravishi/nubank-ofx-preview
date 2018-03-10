@@ -8,11 +8,10 @@ import puppeteer from 'puppeteer';
 
 const info = pkginfo(module, 'version');
 
-const defaultOutputFile = `./nubank-${moment().add(1, 'months').format('YYYY-MM')}.ofx`;
-
 program
     .version(info.version)
     .option('--include-id', 'Include an unique ID in each transaction description.')
+    .option('-f, --format <str>', 'Format. Defaults to ofx. Can also be json.')
     .option('-u, --username <str>', 'Username. Required.')
     .option('-p, --password <str>', 'Password. Required.')
     .option('-t, --timeout <int>', 'Timeout, in seconds, while waiting for pages to load. Defaults to 30.')
@@ -23,6 +22,14 @@ if (!program.username || !program.password) {
     console.error('Please, provide a --username and a --password');
     process.exit(1);
 }
+
+const configuredFormat = (
+    program.format && program.format.toLowerCase() === 'json'
+        ? 'json'
+        : 'ofx'
+);
+
+const defaultOutputFile = `./nubank-${moment().add(1, 'months').format('YYYY-MM')}.${configuredFormat}`;
 
 const outputPath = (
     program.output
@@ -36,33 +43,45 @@ const configuredTimeout = (
         : 30000
 );
 
+const shouldIncludeUid = !!program.includeId;
+
 puppeteer.launch({headless: true})
     .then(async browser => {
         try {
-            const page = await browser.newPage();
-
-            page.setDefaultNavigationTimeout(configuredTimeout);
-
-            console.log('Logging in...');
-
-            await login(page, program.username, program.password);
-
-            console.log('Fetching bill...');
-
-            return await fetchLastBill(page);
+            return await fetchBillAndSaveFile(await browser.newPage());
         } finally {
             await browser.close();
         }
     })
-    .then(bill => {
-        console.log('Generating OFX...');
-        return generateOfx(bill.line_items, {includeUid: !!program.includeId});
-    })
-    .then((ofx) => writeToFile(ofx, outputPath))
-    .then(() => console.log(`Done! OFX file saved to ${outputPath}.`));
+    .then(() => console.log(`Done! ${configuredFormat.toUpperCase()} file saved to ${outputPath}.`));
 
 
 const baseUrl = 'https://conta.nubank.com.br';
+
+async function fetchBillAndSaveFile(page) {
+    page.setDefaultNavigationTimeout(configuredTimeout);
+
+    console.log('Logging in...');
+
+    await login(page, program.username, program.password);
+
+    console.log('Fetching bill...');
+
+    const bill = await fetchLastBill(page);
+
+    const timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
+    const items = bill.line_items.map(i => toItem(timezoneOffset, i));
+
+    console.log(`Generating ${configuredFormat.toUpperCase()}...`);
+
+    const output = (
+        configuredFormat === 'json'
+            ? JSON.stringify(items, null, 2)
+            : generateOfx(items)
+    );
+
+    return await writeToFile(output, outputPath);
+}
 
 async function login(page, username, password) {
     await page.goto(baseUrl, {waitUntil: 'networkidle0'});
@@ -131,8 +150,8 @@ function waitForBillData(page) {
     });
 }
 
-function writeToFile(s, path) {
-    return new Promise((resolve, reject) => {
+async function writeToFile(s, path) {
+    return await new Promise((resolve, reject) => {
         fs.writeFile(path, s, err => {
             if (err) {
                 reject(err);
@@ -143,9 +162,34 @@ function writeToFile(s, path) {
     });
 }
 
-function generateOfx(charges, {timezoneOffset = 180, includeUid = false} = {}) {
-    const tz = (timezoneOffset / 60) * (-1);
+function toItem(timezoneOffset, {id, title, amount, post_date: date}) {
+    const shortid = sh.unique(id);
+    const memo = (
+        !shouldIncludeUid ? title : `#${shortid} - ${title}`
+    );
+    return {
+        id,
+        date: {date, timezoneOffset},
+        memo,
+        title,
+        amount: ((-1) * amount / 100).toFixed(2),
+        shortid,
+    };
+}
 
+function ofxItem({id, date: {date, timezoneOffset}, memo, amount}) {
+    return `
+<STMTTRN>
+<TRNTYPE>DEBIT
+<DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${timezoneOffset / 60 * -1}:GMT]
+<TRNAMT>${((-1) * amount / 100).toFixed(2)}
+<FITID>${id}</FITID>
+<MEMO>${memo}</MEMO>
+</STMTTRN>
+`;
+}
+
+function generateOfx(charges) {
     return `
 OFXHEADER:100
 DATA:OFXSGML
@@ -184,19 +228,7 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-${charges.map(({id, title, amount, post_date: date}) => {
-    const memo = (
-        !includeUid ? title : `#${sh.unique(id)} - ${title}`
-    );
-    return `
-<STMTTRN>
-<TRNTYPE>DEBIT
-<DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${tz}:GMT]
-<TRNAMT>${((-1) * amount / 100).toFixed(2)}
-<FITID>${id}</FITID>
-<MEMO>${memo}</MEMO>
-</STMTTRN>
-`}).join('\n')}
+${charges.map(ofxItem).join('\n')}
 </BANKTRANLIST>
 
 </CCSTMTRS>
