@@ -172,7 +172,7 @@ function toItem(timezoneOffset, {id, title, amount, post_date: date}) {
         date: {date, timezoneOffset},
         memo,
         title,
-        amount: ((-1) * amount / 100).toFixed(2),
+        amount: (amount / 100).toFixed(2),
         shortid,
     };
 }
@@ -182,7 +182,7 @@ function ofxItem({id, date: {date, timezoneOffset}, memo, amount}) {
 <STMTTRN>
 <TRNTYPE>DEBIT
 <DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${timezoneOffset / 60 * -1}:GMT]
-<TRNAMT>${((-1) * amount / 100).toFixed(2)}
+<TRNAMT>${amount * -1}
 <FITID>${id}</FITID>
 <MEMO>${memo}</MEMO>
 </STMTTRN>
