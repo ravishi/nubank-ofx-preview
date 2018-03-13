@@ -22,10 +22,10 @@
     "babel-preset-env": "^1.6.1"
   },
   "dependencies": {
-    "commander": "^2.14.1",
     "moment": "^2.20.1",
-    "pkginfo": "^0.4.1",
+    "p-try": "^1.0.0",
     "puppeteer": "^1.1.0",
-    "shorthash": "0.0.2"
+    "shorthash": "0.0.2",
+    "yargs": "^11.0.0"
   }
 }

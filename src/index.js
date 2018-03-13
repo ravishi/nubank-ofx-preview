@@ -1,93 +1,126 @@
 import fs from 'fs';
 import sh from 'shorthash';
-import path from 'path';
+import pTry from 'p-try';
+import yargs from 'yargs';
 import moment from 'moment';
-import pkginfo from 'pkginfo';
-import program from 'commander';
 import puppeteer from 'puppeteer';
 
-const info = pkginfo(module, 'version');
+const mainCommand = {
+    builder: yargs => yargs
+        .option('format', {
+            type: 'string',
+            alias: 'f',
+            choices: ['ofx', 'json'],
+            default: 'ofx',
+            description: 'Output format',
+        })
+        .option('username', {
+            type: 'string',
+            alias: 'u',
+            description: 'Username',
+            demandOption: true,
+        })
+        .option('password', {
+            alias: 'p',
+            type: 'string',
+            description: 'Password',
+            demandOption: true,
+        })
+        .option('timeout', {
+            type: 'number',
+            alias: 't',
+            default: 30,
+            description: 'Request timeout in seconds',
+        })
+        .option('output', {
+            default: null,
+            description: 'Output file',
+            defaultDescription: 'nubank-YYYY-MM.ofx',
+            normalize: true,
+        })
+        .option('include-id', {
+            type: 'boolean',
+            default: false,
+            description: 'Include a unique ID in the transaction description',
+        })
+    ,
 
-program
-    .version(info.version)
-    .option('--include-id', 'Include an unique ID in each transaction description.')
-    .option('-f, --format <str>', 'Format. Defaults to ofx. Can also be json.')
-    .option('-u, --username <str>', 'Username. Required.')
-    .option('-p, --password <str>', 'Password. Required.')
-    .option('-t, --timeout <int>', 'Timeout, in seconds, while waiting for pages to load. Defaults to 30.')
-    .option('-o, --output <path>', `Output file. Defaults to ${defaultOutputFile}`)
-    .parse(process.argv);
+    command: '$0',
 
-if (!program.username || !program.password) {
-    console.error('Please, provide a --username and a --password');
-    process.exit(1);
+    handler: (argv) => {
+        return pTry(() => main(argv))
+            .then(
+                // onSuccess
+                exitCode => process.exit(exitCode || 0),
+
+                // onError
+                (err) => {
+                    console.error(err);
+                    process.exit(1);
+                }
+            );
+    }
+};
+
+const _ = (
+    yargs.command(mainCommand)
+        .help()
+        .version()
+        .argv
+);
+
+async function main(argv) {
+    if (argv.output === null) {
+        argv.output = `./nubank-${moment().add(1, 'months').format('YYYY-MM')}.${argv.format}`;
+    }
+
+    const timeout = argv.timeout * 1000;
+
+    const browser = await puppeteer.launch({headless: false});
+
+    let bill, timezoneOffset;
+    try {
+        const page = await browser.newPage();
+
+        page.setDefaultNavigationTimeout(timeout);
+
+        console.log('Logging in...');
+
+        await login(page, argv.username, argv.password, timeout);
+
+        console.log('Fetching bill...');
+
+        bill = await fetchLastBill(page);
+
+        timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
+    } finally {
+        await browser.close();
+    }
+
+    const charges = bill.line_items.map(i => toItem(i, timezoneOffset));
+
+    console.log(`Generating ${argv.format.toUpperCase()}...`);
+
+    const output = (
+        argv.format === 'json'
+            ? JSON.stringify(charges, null, 2)
+            : generateOfx(charges, !!argv.includeId)
+    );
+
+    await writeToFile(output, argv.output);
+
+    console.log(`Done! ${argv.format.toUpperCase()} file saved to ${argv.output}.`);
+
+    return 0;
 }
-
-const configuredFormat = (
-    program.format && program.format.toLowerCase() === 'json'
-        ? 'json'
-        : 'ofx'
-);
-
-const defaultOutputFile = `./nubank-${moment().add(1, 'months').format('YYYY-MM')}.${configuredFormat}`;
-
-const outputPath = (
-    program.output
-        ? path.join(process.cwd(), program.output)
-        : defaultOutputFile
-);
-
-const configuredTimeout = (
-    program.timeout
-        ? program.timeout * 1000
-        : 30000
-);
-
-const shouldIncludeUid = !!program.includeId;
-
-puppeteer.launch({headless: true})
-    .then(async browser => {
-        try {
-            return await fetchBillAndSaveFile(await browser.newPage());
-        } finally {
-            await browser.close();
-        }
-    })
-    .then(() => console.log(`Done! ${configuredFormat.toUpperCase()} file saved to ${outputPath}.`));
-
 
 const baseUrl = 'https://conta.nubank.com.br';
 
-async function fetchBillAndSaveFile(page) {
-    page.setDefaultNavigationTimeout(configuredTimeout);
-
-    console.log('Logging in...');
-
-    await login(page, program.username, program.password);
-
-    console.log('Fetching bill...');
-
-    const bill = await fetchLastBill(page);
-
-    const timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
-    const items = bill.line_items.map(i => toItem(timezoneOffset, i));
-
-    console.log(`Generating ${configuredFormat.toUpperCase()}...`);
-
-    const output = (
-        configuredFormat === 'json'
-            ? JSON.stringify(items, null, 2)
-            : generateOfx(items)
-    );
-
-    return await writeToFile(output, outputPath);
-}
-
-async function login(page, username, password) {
+async function login(page, username, password, timeout) {
     await page.goto(baseUrl, {waitUntil: 'networkidle0'});
 
-    await page.waitForSelector('#username', {visible: true, timeout: configuredTimeout});
-    await page.waitForSelector('form input[type="password"]', {visible: true, timeout: configuredTimeout});
+    await page.waitForSelector('#username', {visible: true, timeout});
+    await page.waitForSelector('form input[type="password"]', {visible: true, timeout});
 
     const usernameInput = await page.$('#username');
     await usernameInput.focus();
@@ -107,7 +140,7 @@ async function login(page, username, password) {
 
     // XXX For now, we are clicking and waiting for a selector. But that's pretty volatile, if you ask me.
     const billsButtonSelector = 'li a.menu-item.bills';
-    await page.waitForSelector(billsButtonSelector, {timeout: configuredTimeout});
+    await page.waitForSelector(billsButtonSelector, {timeout});
 
     return true;
 }
@@ -117,7 +150,7 @@ async function fetchLastBill(page) {
     // TODO In the future, we should have a waitForNetworkIdle kind of function to be used here.
     await page.goto('about:blank', {waitUntil: 'load'});
 
-    const [bill, _ignoredResult] = await Promise.all([
+    const [bill, _] = await Promise.all([
         waitForBillData(page),
         page.goto(`${baseUrl}/#/bills`, {waitUntil: 'load'}),
     ]);
@@ -125,12 +158,12 @@ async function fetchLastBill(page) {
     return bill;
 }
 
-function waitForBillData(page) {
+async function waitForBillData(page) {
     // TODO Maybe we could introduce a timeout here?
     // TODO Maybe we could turn this into a helper, which receives a
     // "filter/mapper" and either returns from that filter or times out
     // if the filter doesnt pass.
-    return new Promise((resolve, reject) => {
+    return await new Promise((resolve, reject) => {
         const onResponse = response => {
             response.json().catch(() => null).then(data => {
                 if (data && data.bill && data.bill.state === 'open') {
@@ -162,22 +195,21 @@ async function writeToFile(s, path) {
     });
 }
 
-function toItem(timezoneOffset, {id, title, amount, post_date: date}) {
+function toItem({id, title, amount, post_date: date}, timezoneOffset) {
     const shortid = sh.unique(id);
-    const memo = (
-        !shouldIncludeUid ? title : `#${shortid} - ${title}`
-    );
     return {
         id,
         date: {date, timezoneOffset},
-        memo,
         title,
         amount: (amount / 100).toFixed(2),
         shortid,
     };
 }
 
-function ofxItem({id, date: {date, timezoneOffset}, memo, amount}) {
+function ofxItem({id, date: {date, timezoneOffset}, title, amount, shortid}, shouldIncludeUid) {
+    const memo = (
+        !shouldIncludeUid ? title : `#${shortid} - ${title}`
+    );
     return `
 <STMTTRN>
 <TRNTYPE>DEBIT
@@ -189,7 +221,7 @@ function ofxItem({id, date: {date, timezoneOffset}, memo, amount}) {
 `;
 }
 
-function generateOfx(charges) {
+function generateOfx(charges, shouldIncludeUid) {
     return `
 OFXHEADER:100
 DATA:OFXSGML
@@ -228,7 +260,7 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-${charges.map(ofxItem).join('\n')}
+${charges.map(i => ofxItem(i, shouldIncludeUid)).join('\n')}
 </BANKTRANLIST>
 
 </CCSTMTRS>
