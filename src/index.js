@@ -76,7 +76,7 @@ async function main(argv) {
 
     const timeout = argv.timeout * 1000;
 
-    const browser = await puppeteer.launch({headless: false});
+    const browser = await puppeteer.launch({headless: true});
 
     let bill, timezoneOffset;
     try {
