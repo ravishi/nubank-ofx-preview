@@ -34,9 +34,16 @@ const mainCommand = {
         })
         .option('output', {
             default: null,
+            normalize: true,
             description: 'Output file',
             defaultDescription: 'nubank-YYYY-MM.ofx',
-            normalize: true,
+        })
+        .option('month', {
+            type: 'string',
+            alias: 'm',
+            default: null,
+            description: 'The month you want to export (due date of the bill, format: YYYY-MM)',
+            defaultDescription: 'By default we export the currently open bill'
         })
         .option('include-id', {
             type: 'boolean',
@@ -70,8 +77,14 @@ const _ = (
 );
 
 async function main(argv) {
+    if (argv.month) {
+        argv.month = moment(argv.month);
+    } else {
+        argv.month = moment().add(1, 'months');
+    }
+
     if (argv.output === null) {
-        argv.output = `./nubank-${moment().add(1, 'months').format('YYYY-MM')}.${argv.format}`;
+        argv.output = `./nubank-${argv.month.format('YYYY-MM')}.${argv.format}`;
     }
 
     const timeout = argv.timeout * 1000;
@@ -90,7 +103,7 @@ async function main(argv) {
 
         console.log('Fetching bill...');
 
-        bill = await fetchLastBill(page);
+        bill = await fetchBill(page, argv.month, timeout);
 
         timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
     } finally {
@@ -145,29 +158,33 @@ async function login(page, username, password, timeout) {
     return true;
 }
 
-async function fetchLastBill(page) {
+async function fetchBill(page, month, timeout) {
     // XXX We go to blank, then back to bills page in order to be able to wait for 'load'
     // TODO In the future, we should have a waitForNetworkIdle kind of function to be used here.
     await page.goto('about:blank', {waitUntil: 'load'});
 
-    const [bill, _] = await Promise.all([
-        waitForBillData(page),
-        page.goto(`${baseUrl}/#/bills`, {waitUntil: 'load'}),
+    const [response, _] = await Promise.all([
+        waitJsonResponse(page, response => {
+            return (
+                response && response.bill && (
+                    month === null && response.bill.state === 'open'
+                    || moment(response.bill.summary.due_date).isSame(month, 'month')
+                )
+            );
+        }, timeout),
+        page.goto(`${baseUrl}/#/bills`, {timeout, waitUntil: 'load'}),
     ]);
 
-    return bill;
+    return response.bill;
 }
 
-async function waitForBillData(page) {
-    // TODO Maybe we could introduce a timeout here?
-    // TODO Maybe we could turn this into a helper, which receives a
-    // "filter/mapper" and either returns from that filter or times out
-    // if the filter doesnt pass.
+async function waitJsonResponse(page, predicate, timeout) {
+    // TODO Apply the timeout
     return await new Promise((resolve, reject) => {
         const onResponse = response => {
-            response.json().catch(() => null).then(data => {
-                if (data && data.bill && data.bill.state === 'open') {
-                    resolve(data.bill);
+            response.json().catch(() => undefined).then(data => {
+                if (typeof data !== 'undefined' && predicate(data)) {
+                    resolve(data);
                 }
             });
         };
