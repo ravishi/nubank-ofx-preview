@@ -6,14 +6,9 @@ import moment from 'moment';
 import puppeteer from 'puppeteer';
 
 const mainCommand = {
+    command: '$0',
+
     builder: yargs => yargs
-        .option('format', {
-            type: 'string',
-            alias: 'f',
-            choices: ['ofx', 'json'],
-            default: 'ofx',
-            description: 'Output format',
-        })
         .option('username', {
             type: 'string',
             alias: 'u',
@@ -32,12 +27,6 @@ const mainCommand = {
             default: 30,
             description: 'Request timeout in seconds',
         })
-        .option('output', {
-            default: null,
-            normalize: true,
-            description: 'Output file',
-            defaultDescription: 'nubank-YYYY-MM.ofx',
-        })
         .option('month', {
             type: 'string',
             alias: 'm',
@@ -45,14 +34,25 @@ const mainCommand = {
             description: 'The month you want to export (due date of the bill, format: YYYY-MM)',
             defaultDescription: 'By default we export the currently open bill'
         })
+        .option('output', {
+            default: null,
+            normalize: true,
+            description: 'Output file',
+            defaultDescription: 'nubank-YYYY-MM.ofx',
+        })
+        .option('format', {
+            type: 'string',
+            alias: 'f',
+            choices: ['ofx', 'json'],
+            default: 'ofx',
+            description: 'Output format',
+        })
         .option('include-id', {
             type: 'boolean',
             default: false,
             description: 'Include a unique ID in the transaction description',
         })
     ,
-
-    command: '$0',
 
     handler: (argv) => {
         return pTry(() => main(argv))
@@ -69,7 +69,7 @@ const mainCommand = {
     }
 };
 
-const _ = (
+const argv = (
     yargs.command(mainCommand)
         .help()
         .version()
@@ -89,9 +89,9 @@ async function main(argv) {
 
     const timeout = argv.timeout * 1000;
 
-    const browser = await puppeteer.launch({headless: true});
+    const browser = await puppeteer.launch({headless: false});
 
-    let bill, timezoneOffset;
+    let bills, timezoneOffset;
     try {
         const page = await browser.newPage();
 
@@ -101,14 +101,18 @@ async function main(argv) {
 
         await login(page, argv.username, argv.password, timeout);
 
-        console.log('Fetching bill...');
+        console.log('Fetching bills...');
 
-        bill = await fetchBill(page, argv.month, timeout);
+        bills = await fetchBills(page, timeout);
 
         timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
     } finally {
         await browser.close();
     }
+
+    const bill = bills.find(bill => (
+        moment(bill.summary.due_date).isSame(argv.month, 'month')
+    ));
 
     const charges = bill.line_items.map(i => toItem(i, timezoneOffset));
 
@@ -130,73 +134,106 @@ async function main(argv) {
 const baseUrl = 'https://conta.nubank.com.br';
 
 async function login(page, username, password, timeout) {
-    await page.goto(baseUrl, {waitUntil: 'networkidle0'});
+    await page.goto(baseUrl);
 
-    await page.waitForSelector('#username', {visible: true, timeout});
-    await page.waitForSelector('form input[type="password"]', {visible: true, timeout});
-
-    const usernameInput = await page.$('#username');
+    const usernameInput = await page.waitForSelector('#username', {visible: true, timeout});
     await usernameInput.focus();
-    await usernameInput.type(username, {delay: 100});
+    await usernameInput.type(username, {delay: 58});
 
-    const passwordInput = await page.$('form input[type="password"]');
+    const passwordInput = await page.waitForSelector('form input[type="password"]', {visible: true, timeout});
     await passwordInput.focus();
-    await passwordInput.type(password, {delay: 100});
+    await passwordInput.type(password, {delay: 58});
 
     const submit = await page.$('form button[type="submit"]');
 
-    // TODO: Create some kind of waitForNetworkIdle function and use it here.
-    // See: - https://github.com/GoogleChrome/puppeteer/issues/1412
-    //      - https://github.com/GoogleChrome/puppeteer/issues/1608
-    //
-    await submit.click();
-
-    // XXX For now, we are clicking and waiting for a selector. But that's pretty volatile, if you ask me.
-    const billsButtonSelector = 'li a.menu-item.bills';
-    await page.waitForSelector(billsButtonSelector, {timeout});
+    await Promise.all([
+        submit.click(),
+        waitForNetworkIdle(page)
+    ]);
 
     return true;
 }
 
-async function fetchBill(page, month, timeout) {
-    // XXX We go to blank, then back to bills page in order to be able to wait for 'load'
-    // TODO In the future, we should have a waitForNetworkIdle kind of function to be used here.
-    await page.goto('about:blank', {waitUntil: 'load'});
+async function fetchBills(page, timeout) {
+    const bills = [];
 
-    const [response, _] = await Promise.all([
-        waitJsonResponse(page, response => {
-            return (
-                response && response.bill && (
-                    month === null && response.bill.state === 'open'
-                    || moment(response.bill.summary.due_date).isSame(month, 'month')
-                )
-            );
-        }, timeout),
-        page.goto(`${baseUrl}/#/bills`, {timeout, waitUntil: 'load'}),
-    ]);
+    const onResponse = async (response) => {
+        const data = await response.json().catch(() => null);
+        if (data && data.bill) {
+            bills.push(data.bill);
+        }
+    };
 
-    return response.bill;
+    page.on('response', onResponse);
+
+    try {
+        await Promise.all([
+            page.goto(`${baseUrl}/#/bills`, {timeout, waitUntil: 'networkidle0'}),
+            waitForNetworkIdle(page, {globalTimeout: timeout * 2})
+        ]);
+    } finally {
+        page.removeListener('response', onResponse);
+    }
+
+    return bills;
 }
 
-async function waitJsonResponse(page, predicate, timeout) {
-    // TODO Apply the timeout
+async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTimeout = null} = {}) {
     return await new Promise((resolve, reject) => {
-        const onResponse = response => {
-            response.json().catch(() => undefined).then(data => {
-                if (typeof data !== 'undefined' && predicate(data)) {
-                    resolve(data);
-                }
-            });
+        const deferred = [];
+        const cleanup = () => deferred.reverse().forEach(fn => fn());
+        const cleanupAndReject = (err) => console.log('erroring...') || cleanup() || reject(err);
+        const cleanupAndResolve = (val) => console.log('resolving...') || cleanup() || resolve(val);
+
+        if (globalTimeout === null) {
+            globalTimeout = page._defaultNavigationTimeout;
+        }
+
+        const globalTimeoutId = setTimeout(
+            cleanupAndReject,
+            globalTimeout,
+            new Error('Waiting for network idle timed out')
+        );
+
+        deferred.push(() => {
+            console.log('clearing global timeout...');
+            clearTimeout(globalTimeoutId);
+        });
+
+        let inFlight = 0;
+        let timeoutId = setTimeout(cleanupAndResolve, timeout);
+
+        deferred.push(() => console.log('clearing timeout...') || clearTimeout(timeoutId));
+
+        const onRequest = () => {
+            ++inFlight;
+            console.log(`request sent: ${inFlight} in flight`);
+            if (inFlight > requests) {
+                clearTimeout(timeoutId);
+            }
         };
 
-        const onError = error => {
-            page.off('error', onError);
-            page.off('response', onResponse);
-            reject(error);
+        const onResponse = () => {
+            if (inFlight === 0) {
+                return;
+            }
+            --inFlight;
+            console.log(`response received: ${inFlight} in flight`);
+            if (inFlight <= requests) {
+                timeoutId = setTimeout(cleanupAndResolve, timeout);
+            }
         };
 
-        page.on('error', onError);
-        page.on('response', onResponse);
+        page.on('request', onRequest);
+        page.on('requestfailed', onResponse);
+        page.on('requestfinished', onResponse);
+
+        deferred.push(() => {
+            console.log('removing listeners...');
+            page.removeListener('request', onRequest);
+            page.removeListener('requestfailed', onResponse);
+            page.removeListener('requestfinished', onResponse);
+        });
     });
 }
 
