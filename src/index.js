@@ -89,7 +89,7 @@ async function main(argv) {
 
     const timeout = argv.timeout * 1000;
 
-    const browser = await puppeteer.launch({headless: false});
+    const browser = await puppeteer.launch({headless: true});
 
     let bills, timezoneOffset;
     try {
@@ -99,7 +99,11 @@ async function main(argv) {
 
         console.log('Logging in...');
 
-        await login(page, argv.username, argv.password, timeout);
+        const loginResult = await login(page, argv.username, argv.password, timeout);
+        if (loginResult.error) {
+            console.error(`Login failed: ${loginResult.error}`);
+            return 1;
+        }
 
         console.log('Fetching bills...');
 
@@ -131,7 +135,7 @@ async function main(argv) {
     return 0;
 }
 
-const baseUrl = 'https://conta.nubank.com.br';
+const baseUrl = 'https://app.nubank.com.br';
 
 async function login(page, username, password, timeout) {
     await page.goto(baseUrl);
@@ -146,12 +150,38 @@ async function login(page, username, password, timeout) {
 
     const submit = await page.$('form button[type="submit"]');
 
-    await Promise.all([
-        submit.click(),
-        waitForNetworkIdle(page)
-    ]);
+    let result = null;
+    const onResponse = async (response) => {
+        const request = response.request();
 
-    return true;
+        if (request.method() !== 'POST') {
+            return;
+        }
+
+        let data;
+        try {
+            data = JSON.parse(request.postData());
+        } catch (e) {
+            return;
+        }
+
+        if (data && data.grant_type && data.password) {
+            result = await response.json().catch(() => null);
+        }
+    };
+
+    page.on('response', onResponse);
+
+    try {
+        await Promise.all([
+            submit.click(),
+            waitForNetworkIdle(page)
+        ]);
+    } finally {
+        page.removeListener('response', onResponse);
+    }
+
+    return result;
 }
 
 async function fetchBills(page, timeout) {
@@ -182,8 +212,8 @@ async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTime
     return await new Promise((resolve, reject) => {
         const deferred = [];
         const cleanup = () => deferred.reverse().forEach(fn => fn());
-        const cleanupAndReject = (err) => console.log('erroring...') || cleanup() || reject(err);
-        const cleanupAndResolve = (val) => console.log('resolving...') || cleanup() || resolve(val);
+        const cleanupAndReject = (err) => cleanup() || reject(err);
+        const cleanupAndResolve = (val) => cleanup() || resolve(val);
 
         if (globalTimeout === null) {
             globalTimeout = page._defaultNavigationTimeout;
@@ -196,18 +226,16 @@ async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTime
         );
 
         deferred.push(() => {
-            console.log('clearing global timeout...');
             clearTimeout(globalTimeoutId);
         });
 
         let inFlight = 0;
         let timeoutId = setTimeout(cleanupAndResolve, timeout);
 
-        deferred.push(() => console.log('clearing timeout...') || clearTimeout(timeoutId));
+        deferred.push(() => clearTimeout(timeoutId));
 
         const onRequest = () => {
             ++inFlight;
-            console.log(`request sent: ${inFlight} in flight`);
             if (inFlight > requests) {
                 clearTimeout(timeoutId);
             }
@@ -218,7 +246,6 @@ async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTime
                 return;
             }
             --inFlight;
-            console.log(`response received: ${inFlight} in flight`);
             if (inFlight <= requests) {
                 timeoutId = setTimeout(cleanupAndResolve, timeout);
             }
@@ -229,7 +256,6 @@ async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTime
         page.on('requestfinished', onResponse);
 
         deferred.push(() => {
-            console.log('removing listeners...');
             page.removeListener('request', onRequest);
             page.removeListener('requestfailed', onResponse);
             page.removeListener('requestfinished', onResponse);
