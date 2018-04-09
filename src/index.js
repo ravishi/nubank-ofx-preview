@@ -25,14 +25,14 @@ const mainCommand = {
             type: 'number',
             alias: 't',
             default: 30,
-            description: 'Request timeout in seconds',
+            description: 'Navigation timeout (in seconds)',
         })
         .option('month', {
             type: 'string',
             alias: 'm',
             default: null,
-            description: 'The month you want to export (due date of the bill, format: YYYY-MM)',
-            defaultDescription: 'By default we export the currently open bill'
+            description: 'The month you want to export (due date of the bill, format: YYYY-MM). Can also be `all`',
+            defaultDescription: 'Currently open bill'
         })
         .option('output', {
             default: null,
@@ -52,7 +52,15 @@ const mainCommand = {
             default: false,
             description: 'Include a unique ID in the transaction description',
         })
-    ,
+        .option('headful', {
+            type: 'boolean',
+            default: false,
+            description: (
+                'Run the browser in headful mode '
+                + '(that is, not headless - '
+                + 'useful for development and debugging)'
+            ),
+        }),
 
     handler: (argv) => {
         return pTry(() => main(argv))
@@ -76,20 +84,22 @@ const argv = (
         .argv
 );
 
-async function main(argv) {
-    if (argv.month) {
-        argv.month = moment(argv.month);
-    } else {
-        argv.month = moment().add(1, 'months');
+async function main({month, timeout, headful, ...argv}) {
+    // Validate `month` parameter
+    if (month && month !== 'all') {
+        const monthString = month;
+        moment.suppressDeprecationWarnings = true;
+        month = moment(monthString);
+        if (!month.isValid()) {
+            console.error(`Invalid date format: ${monthString}`);
+            return 1;
+        }
     }
 
-    if (argv.output === null) {
-        argv.output = `./nubank-${argv.month.format('YYYY-MM')}.${argv.format}`;
-    }
+    // Convert `timeout` to milliseconds
+    timeout *= 1000;
 
-    const timeout = argv.timeout * 1000;
-
-    const browser = await puppeteer.launch({headless: true});
+    const browser = await puppeteer.launch({headless: !headful});
 
     let bills, timezoneOffset;
     try {
@@ -114,11 +124,17 @@ async function main(argv) {
         await browser.close();
     }
 
-    const bill = bills.find(bill => (
-        moment(bill.summary.due_date).isSame(argv.month, 'month')
-    ));
+    if (month === null) {
+        bills = bills.filter(bill => bill.state === 'open');
+    } else if (month !== 'all') {
+        bills = bills.filter(bill => (
+            moment(bill.summary.due_date).isSame(month, 'month')
+        ));
+    }
 
-    const charges = bill.line_items.map(i => toItem(i, timezoneOffset));
+    const charges = bills.map(bill => bill.line_items)
+        .reduce((a, b) => a.concat(b), [])
+        .map(i => toItem(i, timezoneOffset));
 
     console.log(`Generating ${argv.format.toUpperCase()}...`);
 
@@ -128,17 +144,32 @@ async function main(argv) {
             : generateOfx(charges, !!argv.includeId)
     );
 
-    await writeToFile(output, argv.output);
+    const outputPath = (
+        argv.output !== null
+            ? argv.output
+            : defaultOutputPath(argv.format, month, bills)
+    );
 
-    console.log(`Done! ${argv.format.toUpperCase()} file saved to ${argv.output}.`);
+    await writeToFile(output, outputPath);
+
+    console.log(`Done! ${argv.format.toUpperCase()} file saved to ${outputPath}`);
 
     return 0;
+}
+
+function defaultOutputPath(format, month, bills) {
+    const name = (
+        month === 'all'
+            ? 'all'
+            : moment(bills[0].summary.due_date).format('YYYY-MM')
+    );
+    return `./nubank-${name}.${format}`;
 }
 
 const baseUrl = 'https://app.nubank.com.br';
 
 async function login(page, username, password, timeout) {
-    await page.goto(baseUrl);
+    await page.goto(baseUrl, {timeout, waitFor: 'networkidle0'});
 
     const usernameInput = await page.waitForSelector('#username', {visible: true, timeout});
     await usernameInput.focus();
@@ -175,7 +206,7 @@ async function login(page, username, password, timeout) {
     try {
         await Promise.all([
             submit.click(),
-            waitForNetworkIdle(page)
+            waitForNetworkIdle(page, {globalTimeout: timeout})
         ]);
     } finally {
         page.removeListener('response', onResponse);
@@ -196,9 +227,38 @@ async function fetchBills(page, timeout) {
 
     page.on('response', onResponse);
 
+    // XXX Going to bills page is problematic, mostly because
+    // the issues when using both goto and hash navigation.
+    // We circumvent that by:
+    //  1. first trying to click the menu item.
+    //  2. if thats not possible, then goto about://blank then goto bills page
+    //
+    // We then rely on `waitForNetworkIdle` to wait for the right moment
+    // to continue the flow of the script.
+    const goToBillsPage = async () => {
+        const url = await page.evaluate('location.href');
+        if (url.startsWith(`${baseUrl}/#/`)) {
+            try {
+                const btn = await page.$('.menu-item.bills');
+                return await btn.click();
+            } catch (e) {
+                console.warn('Clicking the button failed...');
+            }
+        }
+        return await (
+            page.goto('about://blank', {waitFor: 'load'})
+                .then(async () =>
+                    await page.goto(
+                        `${baseUrl}/#/bills`,
+                        {timeout: timeout * 2}
+                    )
+                )
+        );
+    };
+
     try {
         await Promise.all([
-            page.goto(`${baseUrl}/#/bills`, {timeout, waitUntil: 'networkidle0'}),
+            goToBillsPage(),
             waitForNetworkIdle(page, {globalTimeout: timeout * 2})
         ]);
     } finally {
