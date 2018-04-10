@@ -4,9 +4,10 @@ import pTry from 'p-try';
 import yargs from 'yargs';
 import moment from 'moment';
 import chrono from 'chrono-node';
+import inquirer from 'inquirer';
 import puppeteer from 'puppeteer';
 import objectHash from 'object-hash';
-import inquirer from 'inquirer';
+
 
 const mainCommand = {
     command: '$0',
@@ -16,6 +17,12 @@ const mainCommand = {
             type: 'string',
             alias: 'u',
             description: 'Username',
+            demandOption: true,
+        })
+        .option('password', {
+            type: 'string',
+            alias: 'p',
+            description: 'Password. Set it to a minus sign (-) to be prompted',
             demandOption: true,
         })
         .option('timeout', {
@@ -30,23 +37,21 @@ const mainCommand = {
             default: 'open',
             description: (
                 'Since when you want to export '
-                + '(can be a date or one of '
-                + '"open", "last month" '
-                + 'or some other variations)'
+                + '(can be a date or one of "now", '
+                + '"today", "last week", "last month" '
+                + 'or something like that)'
             ),
-            defaultDescription: 'open'
         })
         .option('until', {
             type: 'string',
             alias: 'e',
-            default: 'today',
+            default: 'now',
             description: (
                 'Up until when you want to export '
-                + '(can be a date or one of '
-                + '"today" or "next month" or '
-                + 'some other variations)'
+                + '(can be a date or one of "now", '
+                + '"today", "last week", "last month" '
+                + 'or something like that)'
             ),
-            defaultDescription: 'today'
         })
         .option('output', {
             alias: 'o',
@@ -82,11 +87,13 @@ const mainCommand = {
 
                 // onError
                 (err) => {
-                    console.error(err);
+                    console.error(
+                        argv.extra.includes('traceback') ? err : err.message
+                    );
                     process.exit(1);
                 }
             );
-    }
+    },
 };
 
 const argv = (
@@ -95,17 +102,6 @@ const argv = (
         .version()
         .argv
 );
-
-async function getPasswordForAccount(accountId) {
-    const answers = await inquirer.prompt([{
-        type: 'password',
-        message: `Enter the password for account "${accountId}":`,
-        name: 'password',
-        // validate: value => { value && value.length > 0 ? true : false }
-    }]);
-
-    return answers.password;
-}
 
 async function main(options) {
     const {
@@ -117,14 +113,19 @@ async function main(options) {
         timeout: timeoutInSeconds,
         detailed,
         username,
+        password: givenPassword,
     } = options;
 
-    const password = await getPasswordForAccount(username);
+    const password = (
+        givenPassword !== '-' || extra.includes('no-input')
+            ? givenPassword
+            : await askForPassword(username)
+    );
 
     const {bills, timezoneOffset} =
         await fetchBillsAndTimezoneOffset({
             timeout: timeoutInSeconds * 1000,
-            headless: !extra.includes('not-headless'),
+            headless: !extra.includes('headful'),
             username,
             password,
         });
@@ -132,6 +133,7 @@ async function main(options) {
     const fileFormat = (json ? 'json' : 'ofx');
 
     const fileFormatUpper = fileFormat.toUpperCase();
+
     console.log(`Generating ${fileFormatUpper}...`);
 
     const charges = bills
@@ -149,8 +151,6 @@ async function main(options) {
                 charge.billState
             )
         );
-
-    // TODO: Detailed should be applied to the previous as a map ;D.
 
     const output = (
         json ? JSON.stringify(charges, null, 2)
@@ -170,6 +170,15 @@ async function main(options) {
     return 0;
 }
 
+async function askForPassword(username) {
+    const {password} = await inquirer.prompt([{
+        type: 'password',
+        name: 'password',
+        message: `Please enter a password for user "${username}"`,
+    }]);
+    return password;
+}
+
 async function fetchBillsAndTimezoneOffset({username, password, timeout, headless}) {
     const browser = await puppeteer.launch({headless});
     try {
@@ -179,9 +188,9 @@ async function fetchBillsAndTimezoneOffset({username, password, timeout, headles
 
         console.log('Logging in...');
 
-        const loginResult = await login(page, username, password, timeout);
-        if (loginResult.error) {
-            throw new Error(`Login failed: ${loginResult.error}`);
+        const result = await login(page, username, password, timeout);
+        if (result.error) {
+            throw new Error(`Login failed: ${result.error}`);
         }
 
         console.log('Fetching bills...');
@@ -257,6 +266,12 @@ async function login(page, username, password, timeout) {
         ]);
     } finally {
         page.removeListener('response', onResponse);
+    }
+
+    if (result === null) {
+        result = {
+            error: 'Please verify your username and password'
+        };
     }
 
     return result;
