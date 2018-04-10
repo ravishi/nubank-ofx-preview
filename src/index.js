@@ -3,7 +3,9 @@ import sh from 'shorthash';
 import pTry from 'p-try';
 import yargs from 'yargs';
 import moment from 'moment';
+import chrono from 'chrono-node';
 import puppeteer from 'puppeteer';
+import objectHash from 'object-hash';
 
 const mainCommand = {
     command: '$0',
@@ -27,39 +29,54 @@ const mainCommand = {
             default: 30,
             description: 'Navigation timeout (in seconds)',
         })
-        .option('month', {
+        .option('since', {
             type: 'string',
-            alias: 'm',
-            default: null,
-            description: 'The month you want to export (due date of the bill, format: YYYY-MM). Can also be `all`',
-            defaultDescription: 'Currently open bill'
+            alias: 's',
+            default: 'open',
+            description: (
+                'Since when you want to export '
+                + '(can be a date or one of '
+                + '"open", "last month" '
+                + 'or some other variations)'
+            ),
+            defaultDescription: 'open'
+        })
+        .option('until', {
+            type: 'string',
+            alias: 'e',
+            default: 'today',
+            description: (
+                'Up until when you want to export '
+                + '(can be a date or one of '
+                + '"today" or "next month" or '
+                + 'some other variations)'
+            ),
+            defaultDescription: 'today'
         })
         .option('output', {
+            alias: 'o',
             default: null,
             normalize: true,
             description: 'Output file',
-            defaultDescription: 'nubank-YYYY-MM.ofx',
+            defaultDescription: './nubank-(hash).ofx',
         })
-        .option('format', {
-            type: 'string',
-            alias: 'f',
-            choices: ['ofx', 'json'],
-            default: 'ofx',
-            description: 'Output format',
-        })
-        .option('include-id', {
+        .option('json', {
             type: 'boolean',
+            alias: 'j',
             default: false,
-            description: 'Include a unique ID in the transaction description',
+            description: 'Export as JSON. Changes default output to ./nubank-(hash).json',
         })
-        .option('headful', {
+        .option('detailed', {
             type: 'boolean',
+            alias: 'd',
             default: false,
-            description: (
-                'Run the browser in headful mode '
-                + '(that is, not headless - '
-                + 'useful for development and debugging)'
-            ),
+            description: 'Include detailed information',
+        })
+        .option('extra', {
+            type: 'x',
+            array: true,
+            default: [],
+            description: 'Extra options',
         }),
 
     handler: (argv) => {
@@ -84,24 +101,70 @@ const argv = (
         .argv
 );
 
-async function main({month, timeout, headful, ...argv}) {
-    // Validate `month` parameter
-    if (month && month !== 'all') {
-        const monthString = month;
-        moment.suppressDeprecationWarnings = true;
-        month = moment(monthString);
-        if (!month.isValid()) {
-            console.error(`Invalid date format: ${monthString}`);
-            return 1;
-        }
-    }
+async function main(options) {
+    const {
+        json,
+        extra,
+        since,
+        until,
+        output: requestedOutputPath,
+        timeout: timeoutInSeconds,
+        detailed,
+        username,
+        password,
+    } = options;
 
-    // Convert `timeout` to milliseconds
-    timeout *= 1000;
+    const {bills, timezoneOffset} =
+        await fetchBillsAndTimezoneOffset({
+            timeout: timeoutInSeconds * 1000,
+            headless: !extra.includes('not-headless'),
+            username,
+            password,
+        });
 
-    const browser = await puppeteer.launch({headless: !headful});
+    const fileFormat = (json ? 'json' : 'ofx');
 
-    let bills, timezoneOffset;
+    const fileFormatUpper = fileFormat.toUpperCase();
+    console.log(`Generating ${fileFormatUpper}...`);
+
+    const charges = bills
+        .reduce((charges, bill) =>
+            charges.concat(
+                bill.line_items.map(i =>
+                    asCharge(i, bill.state, timezoneOffset, detailed))),
+            []
+        )
+        .filter(charge =>
+            isBetween(
+                charge.date,
+                since,
+                until,
+                charge.billState
+            )
+        );
+
+    // TODO: Detailed should be applied to the previous as a map ;D.
+
+    const output = (
+        json ? JSON.stringify(charges, null, 2)
+            : generateOfx(charges, detailed)
+    );
+
+    const outputPath = (
+        requestedOutputPath !== null
+            ? requestedOutputPath
+            : defaultOutputPath(bills, fileFormat)
+    );
+
+    await writeToFile(output, outputPath);
+
+    console.log(`${fileFormatUpper} file saved to ${outputPath}!`);
+
+    return 0;
+}
+
+async function fetchBillsAndTimezoneOffset({username, password, timeout, headless}) {
+    const browser = await puppeteer.launch({headless});
     try {
         const page = await browser.newPage();
 
@@ -109,61 +172,38 @@ async function main({month, timeout, headful, ...argv}) {
 
         console.log('Logging in...');
 
-        const loginResult = await login(page, argv.username, argv.password, timeout);
+        const loginResult = await login(page, username, password, timeout);
         if (loginResult.error) {
-            console.error(`Login failed: ${loginResult.error}`);
-            return 1;
+            throw new Error(`Login failed: ${loginResult.error}`);
         }
 
         console.log('Fetching bills...');
 
-        bills = await fetchBills(page, timeout);
+        const bills = await fetchBills(page, timeout);
 
-        timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
+        const timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
+
+        return {bills, timezoneOffset};
     } finally {
         await browser.close();
     }
-
-    if (month === null) {
-        bills = bills.filter(bill => bill.state === 'open');
-    } else if (month !== 'all') {
-        bills = bills.filter(bill => (
-            moment(bill.summary.due_date).isSame(month, 'month')
-        ));
-    }
-
-    const charges = bills.map(bill => bill.line_items)
-        .reduce((a, b) => a.concat(b), [])
-        .map(i => toItem(i, timezoneOffset));
-
-    console.log(`Generating ${argv.format.toUpperCase()}...`);
-
-    const output = (
-        argv.format === 'json'
-            ? JSON.stringify(charges, null, 2)
-            : generateOfx(charges, !!argv.includeId)
-    );
-
-    const outputPath = (
-        argv.output !== null
-            ? argv.output
-            : defaultOutputPath(argv.format, month, bills)
-    );
-
-    await writeToFile(output, outputPath);
-
-    console.log(`Done! ${argv.format.toUpperCase()} file saved to ${outputPath}`);
-
-    return 0;
 }
 
-function defaultOutputPath(format, month, bills) {
-    const name = (
-        month === 'all'
-            ? 'all'
-            : moment(bills[0].summary.due_date).format('YYYY-MM')
-    );
-    return `./nubank-${name}.${format}`;
+function isBetween(dt, since, until, billState) {
+    if (since === 'forever' && until === 'forever') {
+        return true;
+    } else if (since === 'open' && billState === 'open') {
+        return isBetween(dt, 'forever', until, billState);
+    } else {
+        const sinceDate = chrono.parseDate(since);
+        const untilDate = chrono.parseDate(until);
+        return moment(dt).isBetween(moment(sinceDate), moment(untilDate));
+    }
+}
+
+function defaultOutputPath(bills, format) {
+    const name = objectHash(bills);
+    return `./nubank-${sh.unique(name)}.${format}`;
 }
 
 const baseUrl = 'https://app.nubank.com.br';
@@ -335,20 +375,40 @@ async function writeToFile(s, path) {
     });
 }
 
-function toItem({id, title, amount, post_date: date}, timezoneOffset) {
-    const shortid = sh.unique(id);
-    return {
+function asCharge(itemData, billState, timezoneOffset, detailed) {
+    const {
+        id,
+        title,
+        amount,
+        post_date: date,
+    } = itemData;
+    const charge = {
         id,
         date: {date, timezoneOffset},
         title,
         amount: (amount / 100).toFixed(2),
-        shortid,
+        billState,
     };
+    if (detailed) {
+        return {...itemData, ...charge};
+    } else {
+        return charge;
+    }
 }
 
-function ofxItem({id, date: {date, timezoneOffset}, title, amount, shortid}, shouldIncludeUid) {
+function ofxItem(itemData, detailed) {
+    const {
+        id,
+        date: {
+            date,
+            timezoneOffset
+        },
+        title,
+        amount,
+    } = itemData;
+    const shortid = sh.unique(id);
     const memo = (
-        !shouldIncludeUid ? title : `#${shortid} - ${title}`
+        detailed ? `#${shortid} - ${title}` : title
     );
     return `
 <STMTTRN>
@@ -361,7 +421,7 @@ function ofxItem({id, date: {date, timezoneOffset}, title, amount, shortid}, sho
 `;
 }
 
-function generateOfx(charges, shouldIncludeUid) {
+function generateOfx(charges, detailed) {
     return `
 OFXHEADER:100
 DATA:OFXSGML
@@ -400,7 +460,7 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-${charges.map(i => ofxItem(i, shouldIncludeUid)).join('\n')}
+${charges.map(i => ofxItem(i, detailed)).join('\n')}
 </BANKTRANLIST>
 
 </CCSTMTRS>
