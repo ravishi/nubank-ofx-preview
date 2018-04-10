@@ -6,6 +6,7 @@ import moment from 'moment';
 import chrono from 'chrono-node';
 import puppeteer from 'puppeteer';
 import objectHash from 'object-hash';
+import inquirer from 'inquirer';
 
 const mainCommand = {
     command: '$0',
@@ -15,12 +16,6 @@ const mainCommand = {
             type: 'string',
             alias: 'u',
             description: 'Username',
-            demandOption: true,
-        })
-        .option('password', {
-            alias: 'p',
-            type: 'string',
-            description: 'Password',
             demandOption: true,
         })
         .option('timeout', {
@@ -101,6 +96,17 @@ const argv = (
         .argv
 );
 
+async function getPasswordForAccount(accountId) {
+    const answers = await inquirer.prompt([{
+        type: 'password',
+        message: `Enter the password for account "${accountId}":`,
+        name: 'password',
+        // validate: value => { value && value.length > 0 ? true : false }
+    }]);
+
+    return answers.password;
+}
+
 async function main(options) {
     const {
         json,
@@ -111,8 +117,9 @@ async function main(options) {
         timeout: timeoutInSeconds,
         detailed,
         username,
-        password,
     } = options;
+
+    const password = await getPasswordForAccount(username);
 
     const {bills, timezoneOffset} =
         await fetchBillsAndTimezoneOffset({
