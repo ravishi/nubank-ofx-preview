@@ -38,7 +38,7 @@ const mainCommand = {
             description: (
                 'Since when you want to export '
                 + '(can be a date or one of "now", '
-                + '"today", "last week", "last month" '
+                + '"today", "last week", "last month", "forever" '
                 + 'or something like that)'
             ),
         })
@@ -134,6 +134,7 @@ async function main(options) {
 
     const fileFormatUpper = fileFormat.toUpperCase();
 
+    console.log(`Period: Since ${since}, until ${until}`);
     console.log(`Generating ${fileFormatUpper}...`);
 
     const charges = bills
@@ -206,15 +207,15 @@ async function fetchBillsAndTimezoneOffset({username, password, timeout, headles
 }
 
 function isBetween(dt, since, until, billState) {
-    if (since === 'forever' && until === 'forever') {
+    if (since === 'forever') {
         return true;
-    } else if (since === 'open' && billState === 'open') {
-        return isBetween(dt, 'forever', until, billState);
-    } else {
-        const sinceDate = chrono.parseDate(since);
-        const untilDate = chrono.parseDate(until);
-        return moment(dt).isBetween(moment(sinceDate), moment(untilDate));
+    } else if (since === 'open') {
+        return billState === 'open';
     }
+
+    const sinceDate = chrono.parseDate(since);
+    const untilDate = chrono.parseDate(until);
+    return moment(dt).isBetween(moment(sinceDate), moment(untilDate));
 }
 
 function defaultOutputPath(bills, format) {
