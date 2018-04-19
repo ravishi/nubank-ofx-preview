@@ -9,6 +9,15 @@ import puppeteer from 'puppeteer';
 import objectHash from 'object-hash';
 
 
+function handleError({extra}, error) {
+    if (error instanceof Error && !extra.includes('traceback')) {
+        error = error.message;
+    }
+    console.error(error);
+    return (error && error.exitCode) || 1;
+}
+
+
 const mainCommand = {
     command: '$0',
 
@@ -75,28 +84,20 @@ const mainCommand = {
         .option('extra', {
             type: 'x',
             array: true,
+            hidden: true,
             default: [],
-            description: 'Extra options',
+            description: 'Extra, undocumented options',
         }),
 
-    handler: (argv) => {
-        return pTry(() => main(argv))
-            .then(
-                // onSuccess
-                exitCode => process.exit(exitCode || 0),
-
-                // onError
-                (err) => {
-                    console.error(
-                        argv.extra.includes('traceback') ? err : err.message
-                    );
-                    process.exit(1);
-                }
-            );
-    },
+    handler: (argv) => (
+        pTry(() => main(argv))
+            .catch(handleError.bind(null, argv))
+            .then(exitCode => exitCode || 0)
+            .then(process.exit)
+    ),
 };
 
-const argv = (
+void (
     yargs.command(mainCommand)
         .help()
         .version()
@@ -122,10 +123,14 @@ async function main(options) {
             : await askForPassword(username)
     );
 
+    const timeout = timeoutInSeconds * 1000;
+
+    const headless = !extra.includes('headful');
+
     const {bills, timezoneOffset} =
         await fetchBillsAndTimezoneOffset({
-            timeout: timeoutInSeconds * 1000,
-            headless: !extra.includes('headful'),
+            timeout,
+            headless,
             username,
             password,
         });
