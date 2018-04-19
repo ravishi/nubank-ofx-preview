@@ -8,7 +8,6 @@ import inquirer from 'inquirer';
 import puppeteer from 'puppeteer';
 import objectHash from 'object-hash';
 
-
 function handleError({extra}, error) {
     if (error instanceof Error && !extra.includes('traceback')) {
         error = error.message;
@@ -16,7 +15,6 @@ function handleError({extra}, error) {
     console.error(error);
     return (error && error.exitCode) || 1;
 }
-
 
 const mainCommand = {
     command: '$0',
@@ -142,20 +140,15 @@ async function main(options) {
     console.log(`Generating ${fileFormatUpper}...`);
 
     const charges = bills
-        .reduce((charges, bill) =>
-            charges.concat(
-                bill.line_items.map(i =>
-                    asCharge(i, bill.state, timezoneOffset, detailed))),
+        .reduce((charges, bill) => charges.concat(
+            bill.line_items.map(i =>
+                asCharge(i, bill.state, timezoneOffset, detailed))
+            ),
             []
         )
-        .filter(charge =>
-            isBetween(
-                charge.date,
-                since,
-                until,
-                charge.billState
-            )
-        );
+        .filter(charge => isBetween(
+            charge.date.date, since, until, charge.billState
+        ));
 
     const output = (
         json ? JSON.stringify(charges, null, 2)
@@ -210,15 +203,28 @@ async function fetchBillsAndTimezoneOffset({username, password, timeout, headles
     }
 }
 
+// FIXME: This is stupidly unoptimized: we're parsing sinceDate and untilDate
+// for each item, and we're mixing both dates and 'forever', 'open', etc.
+// Maybe we could have a factory that takes the static 'since' and 'until' and
+// returns a comparator that can be used as a filter.
 function isBetween(dt, since, until, billState) {
     if (since === 'forever' && until === 'forever') {
         return true;
     } else if (since === 'open' && billState === 'open') {
         return isBetween(dt, 'forever', until, billState);
     } else {
-        const sinceDate = chrono.parseDate(since);
-        const untilDate = chrono.parseDate(until);
-        return moment(dt).isBetween(moment(sinceDate), moment(untilDate));
+        const sinceDate = parseDate(since);
+        const untilDate = parseDate(until);
+        return moment(dt).isBetween(sinceDate, untilDate);
+    }
+}
+
+function parseDate(text) {
+    try {
+        return moment(text);
+    } catch (e) {
+        const dt = chrono.parseDate(text);
+        return moment(dt);
     }
 }
 
