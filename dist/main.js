@@ -1,107 +1,110 @@
 #!/usr/bin/env node
-import fs from 'fs';
-import sh from 'shorthash';
-import pTry from 'p-try';
-import yargs from 'yargs';
-import moment from 'moment';
-import chrono from 'chrono-node';
-import inquirer from 'inquirer';
-import puppeteer from 'puppeteer';
-import objectHash from 'object-hash';
+'use strict';
 
-function handleError({extra}, error) {
+var _extends = Object.assign || function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; };
+
+var _fs = require('fs');
+
+var _fs2 = _interopRequireDefault(_fs);
+
+var _shorthash = require('shorthash');
+
+var _shorthash2 = _interopRequireDefault(_shorthash);
+
+var _pTry = require('p-try');
+
+var _pTry2 = _interopRequireDefault(_pTry);
+
+var _yargs = require('yargs');
+
+var _yargs2 = _interopRequireDefault(_yargs);
+
+var _moment = require('moment');
+
+var _moment2 = _interopRequireDefault(_moment);
+
+var _chronoNode = require('chrono-node');
+
+var _chronoNode2 = _interopRequireDefault(_chronoNode);
+
+var _inquirer = require('inquirer');
+
+var _inquirer2 = _interopRequireDefault(_inquirer);
+
+var _puppeteer = require('puppeteer');
+
+var _puppeteer2 = _interopRequireDefault(_puppeteer);
+
+var _objectHash = require('object-hash');
+
+var _objectHash2 = _interopRequireDefault(_objectHash);
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
+
+function handleError({ extra }, error) {
     if (error instanceof Error && !extra.includes('traceback')) {
         error = error.message;
     }
     console.error(error);
-    return (error && error.exitCode) || 1;
+    return error && error.exitCode || 1;
 }
 
 const mainCommand = {
     command: '$0',
 
-    builder: yargs => yargs
-        .option('username', {
-            type: 'string',
-            alias: 'u',
-            description: 'Username',
-            demandOption: true,
-        })
-        .option('password', {
-            type: 'string',
-            alias: 'p',
-            description: 'Password. Set it to a minus sign (-) to be prompted',
-            demandOption: true,
-        })
-        .option('timeout', {
-            type: 'number',
-            alias: 't',
-            default: 30,
-            description: 'Navigation timeout (in seconds)',
-        })
-        .option('since', {
-            type: 'string',
-            alias: 's',
-            default: 'open',
-            description: (
-                'Since when you want to export '
-                + '(can be a date or one of "now", '
-                + '"today", "last week", "last month" '
-                + 'or something like that)'
-            ),
-        })
-        .option('until', {
-            type: 'string',
-            alias: 'e',
-            default: 'now',
-            description: (
-                'Up until when you want to export '
-                + '(can be a date or one of "now", '
-                + '"today", "last week", "last month" '
-                + 'or something like that)'
-            ),
-        })
-        .option('output', {
-            alias: 'o',
-            default: null,
-            normalize: true,
-            description: 'Output file',
-            defaultDescription: './nubank-(hash).ofx',
-        })
-        .option('json', {
-            type: 'boolean',
-            alias: 'j',
-            default: false,
-            description: 'Export as JSON. Changes default output to ./nubank-(hash).json',
-        })
-        .option('detailed', {
-            type: 'boolean',
-            alias: 'd',
-            default: false,
-            description: 'Include detailed information',
-        })
-        .option('extra', {
-            type: 'x',
-            array: true,
-            hidden: true,
-            default: [],
-            description: 'Extra, undocumented options',
-        }),
+    builder: yargs => yargs.option('username', {
+        type: 'string',
+        alias: 'u',
+        description: 'Username',
+        demandOption: true
+    }).option('password', {
+        type: 'string',
+        alias: 'p',
+        description: 'Password. Set it to a minus sign (-) to be prompted',
+        demandOption: true
+    }).option('timeout', {
+        type: 'number',
+        alias: 't',
+        default: 30,
+        description: 'Navigation timeout (in seconds)'
+    }).option('since', {
+        type: 'string',
+        alias: 's',
+        default: 'open',
+        description: 'Since when you want to export ' + '(can be a date or one of "now", ' + '"today", "last week", "last month" ' + 'or something like that)'
+    }).option('until', {
+        type: 'string',
+        alias: 'e',
+        default: 'now',
+        description: 'Up until when you want to export ' + '(can be a date or one of "now", ' + '"today", "last week", "last month" ' + 'or something like that)'
+    }).option('output', {
+        alias: 'o',
+        default: null,
+        normalize: true,
+        description: 'Output file',
+        defaultDescription: './nubank-(hash).ofx'
+    }).option('json', {
+        type: 'boolean',
+        alias: 'j',
+        default: false,
+        description: 'Export as JSON. Changes default output to ./nubank-(hash).json'
+    }).option('detailed', {
+        type: 'boolean',
+        alias: 'd',
+        default: false,
+        description: 'Include detailed information'
+    }).option('extra', {
+        type: 'x',
+        array: true,
+        hidden: true,
+        default: [],
+        description: 'Extra, undocumented options'
+    }),
 
-    handler: (argv) => (
-        pTry(() => main(argv))
-            .catch(handleError.bind(null, argv))
-            .then(exitCode => exitCode || 0)
-            .then(process.exit)
-    ),
+    handler: argv => (0, _pTry2.default)(() => main(argv)).catch(handleError.bind(null, argv)).then(exitCode => exitCode || 0).then(process.exit)
 };
 
-void (
-    yargs.command(mainCommand)
-        .help()
-        .version()
-        .argv
-);
+void _yargs2.default.command(mainCommand).help().version().argv;
 
 async function main(options) {
     const {
@@ -113,54 +116,33 @@ async function main(options) {
         timeout: timeoutInSeconds,
         detailed,
         username,
-        password: givenPassword,
+        password: givenPassword
     } = options;
 
-    const password = (
-        givenPassword !== '-' || extra.includes('no-input')
-            ? givenPassword
-            : await askForPassword(username)
-    );
+    const password = givenPassword !== '-' || extra.includes('no-input') ? givenPassword : await askForPassword(username);
 
     const timeout = timeoutInSeconds * 1000;
 
     const headless = !extra.includes('headful');
 
-    const {bills, timezoneOffset} =
-        await fetchBillsAndTimezoneOffset({
-            timeout,
-            headless,
-            username,
-            password,
-        });
+    const { bills, timezoneOffset } = await fetchBillsAndTimezoneOffset({
+        timeout,
+        headless,
+        username,
+        password
+    });
 
-    const fileFormat = (json ? 'json' : 'ofx');
+    const fileFormat = json ? 'json' : 'ofx';
 
     const fileFormatUpper = fileFormat.toUpperCase();
 
     console.log(`Generating ${fileFormatUpper}...`);
 
-    const charges = bills
-        .reduce((charges, bill) => charges.concat(
-            bill.line_items.map(i =>
-                asCharge(i, bill.state, timezoneOffset, detailed))
-            ),
-            []
-        )
-        .filter(charge => isBetween(
-            charge.date.date, since, until, charge.billState
-        ));
+    const charges = bills.reduce((charges, bill) => charges.concat(bill.line_items.map(i => asCharge(i, bill.state, timezoneOffset, detailed))), []).filter(charge => isBetween(charge.date.date, since, until, charge.billState));
 
-    const output = (
-        json ? JSON.stringify(charges, null, 2)
-            : generateOfx(charges, detailed)
-    );
+    const output = json ? JSON.stringify(charges, null, 2) : generateOfx(charges, detailed);
 
-    const outputPath = (
-        requestedOutputPath !== null
-            ? requestedOutputPath
-            : defaultOutputPath(bills, fileFormat)
-    );
+    const outputPath = requestedOutputPath !== null ? requestedOutputPath : defaultOutputPath(bills, fileFormat);
 
     await writeToFile(output, outputPath);
 
@@ -170,16 +152,16 @@ async function main(options) {
 }
 
 async function askForPassword(username) {
-    const {password} = await inquirer.prompt([{
+    const { password } = await _inquirer2.default.prompt([{
         type: 'password',
         name: 'password',
-        message: `Please enter a password for user "${username}"`,
+        message: `Please enter a password for user "${username}"`
     }]);
     return password;
 }
 
-async function fetchBillsAndTimezoneOffset({username, password, timeout, headless}) {
-    const browser = await puppeteer.launch({headless});
+async function fetchBillsAndTimezoneOffset({ username, password, timeout, headless }) {
+    const browser = await _puppeteer2.default.launch({ headless });
     try {
         const page = await browser.newPage();
 
@@ -198,7 +180,7 @@ async function fetchBillsAndTimezoneOffset({username, password, timeout, headles
 
         const timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
 
-        return {bills, timezoneOffset};
+        return { bills, timezoneOffset };
     } finally {
         await browser.close();
     }
@@ -216,41 +198,41 @@ function isBetween(dt, since, until, billState) {
     } else {
         const sinceDate = parseDate(since);
         const untilDate = parseDate(until);
-        return moment(dt).isBetween(sinceDate, untilDate);
+        return (0, _moment2.default)(dt).isBetween(sinceDate, untilDate);
     }
 }
 
 function parseDate(text) {
     try {
-        return moment(text);
+        return (0, _moment2.default)(text);
     } catch (e) {
-        const dt = chrono.parseDate(text);
-        return moment(dt);
+        const dt = _chronoNode2.default.parseDate(text);
+        return (0, _moment2.default)(dt);
     }
 }
 
 function defaultOutputPath(bills, format) {
-    const name = objectHash(bills);
-    return `./nubank-${sh.unique(name)}.${format}`;
+    const name = (0, _objectHash2.default)(bills);
+    return `./nubank-${_shorthash2.default.unique(name)}.${format}`;
 }
 
 const baseUrl = 'https://app.nubank.com.br';
 
 async function login(page, username, password, timeout) {
-    await page.goto(baseUrl, {timeout, waitFor: 'networkidle0'});
+    await page.goto(baseUrl, { timeout, waitFor: 'networkidle0' });
 
-    const usernameInput = await page.waitForSelector('#username', {visible: true, timeout});
+    const usernameInput = await page.waitForSelector('#username', { visible: true, timeout });
     await usernameInput.focus();
-    await usernameInput.type(username, {delay: 58});
+    await usernameInput.type(username, { delay: 58 });
 
-    const passwordInput = await page.waitForSelector('form input[type="password"]', {visible: true, timeout});
+    const passwordInput = await page.waitForSelector('form input[type="password"]', { visible: true, timeout });
     await passwordInput.focus();
-    await passwordInput.type(password, {delay: 58});
+    await passwordInput.type(password, { delay: 58 });
 
     const submit = await page.$('form button[type="submit"]');
 
     let result = null;
-    const onResponse = async (response) => {
+    const onResponse = async response => {
         const request = response.request();
 
         if (request.method() !== 'POST') {
@@ -272,10 +254,7 @@ async function login(page, username, password, timeout) {
     page.on('response', onResponse);
 
     try {
-        await Promise.all([
-            submit.click(),
-            waitForNetworkIdle(page, {globalTimeout: timeout})
-        ]);
+        await Promise.all([submit.click(), waitForNetworkIdle(page, { globalTimeout: timeout })]);
     } finally {
         page.removeListener('response', onResponse);
     }
@@ -292,7 +271,7 @@ async function login(page, username, password, timeout) {
 async function fetchBills(page, timeout) {
     const bills = [];
 
-    const onResponse = async (response) => {
+    const onResponse = async response => {
         const data = await response.json().catch(() => null);
         if (data && data.bill) {
             bills.push(data.bill);
@@ -319,22 +298,11 @@ async function fetchBills(page, timeout) {
                 console.warn('Clicking the button failed...');
             }
         }
-        return await (
-            page.goto('about://blank', {waitFor: 'load'})
-                .then(async () =>
-                    await page.goto(
-                        `${baseUrl}/#/bills`,
-                        {timeout: timeout * 2}
-                    )
-                )
-        );
+        return await page.goto('about://blank', { waitFor: 'load' }).then(async () => await page.goto(`${baseUrl}/#/bills`, { timeout: timeout * 2 }));
     };
 
     try {
-        await Promise.all([
-            goToBillsPage(),
-            waitForNetworkIdle(page, {globalTimeout: timeout * 2})
-        ]);
+        await Promise.all([goToBillsPage(), waitForNetworkIdle(page, { globalTimeout: timeout * 2 })]);
     } finally {
         page.removeListener('response', onResponse);
     }
@@ -342,22 +310,18 @@ async function fetchBills(page, timeout) {
     return bills;
 }
 
-async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTimeout = null} = {}) {
+async function waitForNetworkIdle(page, { timeout = 500, requests = 0, globalTimeout = null } = {}) {
     return await new Promise((resolve, reject) => {
         const deferred = [];
         const cleanup = () => deferred.reverse().forEach(fn => fn());
-        const cleanupAndReject = (err) => cleanup() || reject(err);
-        const cleanupAndResolve = (val) => cleanup() || resolve(val);
+        const cleanupAndReject = err => cleanup() || reject(err);
+        const cleanupAndResolve = val => cleanup() || resolve(val);
 
         if (globalTimeout === null) {
             globalTimeout = page._defaultNavigationTimeout;
         }
 
-        const globalTimeoutId = setTimeout(
-            cleanupAndReject,
-            globalTimeout,
-            new Error('Waiting for network idle timed out')
-        );
+        const globalTimeoutId = setTimeout(cleanupAndReject, globalTimeout, new Error('Waiting for network idle timed out'));
 
         deferred.push(() => {
             clearTimeout(globalTimeoutId);
@@ -399,7 +363,7 @@ async function waitForNetworkIdle(page, {timeout = 500, requests = 0, globalTime
 
 async function writeToFile(s, path) {
     return await new Promise((resolve, reject) => {
-        fs.writeFile(path, s, err => {
+        _fs2.default.writeFile(path, s, err => {
             if (err) {
                 reject(err);
             } else {
@@ -414,17 +378,17 @@ function asCharge(itemData, billState, timezoneOffset, detailed) {
         id,
         title,
         amount,
-        post_date: date,
+        post_date: date
     } = itemData;
     const charge = {
         id,
-        date: {date, timezoneOffset},
+        date: { date, timezoneOffset },
         title,
         amount: (amount / 100).toFixed(2),
-        billState,
+        billState
     };
     if (detailed) {
-        return {...itemData, ...charge};
+        return _extends({}, itemData, charge);
     } else {
         return charge;
     }
@@ -438,16 +402,14 @@ function ofxItem(itemData, detailed) {
             timezoneOffset
         },
         title,
-        amount,
+        amount
     } = itemData;
-    const shortid = sh.unique(id);
-    const memo = (
-        detailed ? `#${shortid} - ${title}` : title
-    );
+    const shortid = _shorthash2.default.unique(id);
+    const memo = detailed ? `#${shortid} - ${title}` : title;
     return `
 <STMTTRN>
 <TRNTYPE>DEBIT
-<DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${timezoneOffset / 60 * -1}:GMT]
+<DTPOSTED>${(0, _moment2.default)(date).format('YYYYMMDD')}000000[${timezoneOffset / 60 * -1}:GMT]
 <TRNAMT>${amount * -1}
 <FITID>${id}</FITID>
 <MEMO>${memo}</MEMO>

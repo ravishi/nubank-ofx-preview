@@ -1,8 +1,12 @@
 {
+  "bin": {
+    "nubank-ofx-preview": "./dist/main.js"
+  },
   "name": "nubank-ofx-preview",
-  "version": "0.1.0",
-  "description": "",
+  "version": "0.0.5",
+  "description": "Generate a preview OFX from your NuBank account",
   "scripts": {
+    "build": "mkdir -p dist && babel src/index.js -o dist/main.js",
     "start": "babel-node src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
