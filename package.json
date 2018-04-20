@@ -3,12 +3,12 @@
     "nubank-ofx-preview": "./dist/main.js"
   },
   "name": "nubank-ofx-preview",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Generate a preview OFX from your NuBank account",
   "scripts": {
     "build": "mkdir -p dist && babel src/index.js -o dist/main.js",
     "start": "babel-node src/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha --compilers js:babel-core/register src/**/*.spec.js"
   },
   "repository": {
     "type": "git",
@@ -25,7 +25,9 @@
     "babel-cli": "^6.26.0",
     "babel-plugin-transform-es2015-spread": "^6.22.0",
     "babel-plugin-transform-object-rest-spread": "^6.26.0",
-    "babel-preset-env": "^1.6.1"
+    "babel-preset-env": "^1.6.1",
+    "chai": "^4.1.2",
+    "mocha": "^5.1.1"
   },
   "dependencies": {
     "chrono-node": "^1.3.5",

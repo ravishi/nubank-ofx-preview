@@ -4,10 +4,11 @@ import sh from 'shorthash';
 import pTry from 'p-try';
 import yargs from 'yargs';
 import moment from 'moment';
-import chrono from 'chrono-node';
 import inquirer from 'inquirer';
 import puppeteer from 'puppeteer';
 import objectHash from 'object-hash';
+
+import {createDateFilter} from "./stuff";
 
 function handleError({extra}, error) {
     if (error instanceof Error && !extra.includes('traceback')) {
@@ -140,6 +141,8 @@ async function main(options) {
 
     console.log(`Generating ${fileFormatUpper}...`);
 
+    const dateFilter = createDateFilter(since, until);
+
     const charges = bills
         .reduce((charges, bill) => charges.concat(
             bill.line_items.map(i =>
@@ -147,8 +150,8 @@ async function main(options) {
             ),
             []
         )
-        .filter(charge => isBetween(
-            charge.date.date, since, until, charge.billState
+        .filter(charge => dateFilter(
+            charge.date.date, charge.billState
         ));
 
     const output = (
@@ -201,31 +204,6 @@ async function fetchBillsAndTimezoneOffset({username, password, timeout, headles
         return {bills, timezoneOffset};
     } finally {
         await browser.close();
-    }
-}
-
-// FIXME: This is stupidly unoptimized: we're parsing sinceDate and untilDate
-// for each item, and we're mixing both dates and 'forever', 'open', etc.
-// Maybe we could have a factory that takes the static 'since' and 'until' and
-// returns a comparator that can be used as a filter.
-function isBetween(dt, since, until, billState) {
-    if (since === 'forever' && until === 'forever') {
-        return true;
-    } else if (since === 'open' && billState === 'open') {
-        return isBetween(dt, 'forever', until, billState);
-    } else {
-        const sinceDate = parseDate(since);
-        const untilDate = parseDate(until);
-        return moment(dt).isBetween(sinceDate, untilDate);
-    }
-}
-
-function parseDate(text) {
-    try {
-        return moment(text);
-    } catch (e) {
-        const dt = chrono.parseDate(text);
-        return moment(dt);
     }
 }
 
