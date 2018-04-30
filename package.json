@@ -3,7 +3,7 @@
     "nubank-ofx-preview": "./dist/main.js"
   },
   "name": "nubank-ofx-preview",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Generate a preview OFX from your NuBank account",
   "scripts": {
     "build": "mkdir -p dist && babel src/index.js -o dist/main.js",

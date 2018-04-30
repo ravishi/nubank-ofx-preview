@@ -23,10 +23,6 @@ var _moment = require('moment');
 
 var _moment2 = _interopRequireDefault(_moment);
 
-var _chronoNode = require('chrono-node');
-
-var _chronoNode2 = _interopRequireDefault(_chronoNode);
-
 var _inquirer = require('inquirer');
 
 var _inquirer2 = _interopRequireDefault(_inquirer);
@@ -38,6 +34,8 @@ var _puppeteer2 = _interopRequireDefault(_puppeteer);
 var _objectHash = require('object-hash');
 
 var _objectHash2 = _interopRequireDefault(_objectHash);
+
+var _stuff = require('./stuff');
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
@@ -83,16 +81,6 @@ const mainCommand = {
         normalize: true,
         description: 'Output file',
         defaultDescription: './nubank-(hash).ofx'
-    }).option('json', {
-        type: 'boolean',
-        alias: 'j',
-        default: false,
-        description: 'Export as JSON. Changes default output to ./nubank-(hash).json'
-    }).option('detailed', {
-        type: 'boolean',
-        alias: 'd',
-        default: false,
-        description: 'Include detailed information'
     }).option('extra', {
         type: 'x',
         array: true,
@@ -108,22 +96,24 @@ void _yargs2.default.command(mainCommand).help().version().argv;
 
 async function main(options) {
     const {
-        json,
         extra,
         since,
         until,
         output: requestedOutputPath,
         timeout: timeoutInSeconds,
-        detailed,
         username,
         password: givenPassword
     } = options;
 
     const password = givenPassword !== '-' || extra.includes('no-input') ? givenPassword : await askForPassword(username);
 
+    const json = extra.includes('for-sync');
+
     const timeout = timeoutInSeconds * 1000;
 
     const headless = !extra.includes('headful');
+
+    const dateFilter = (0, _stuff.createDateFilter)(since, until);
 
     const { bills, timezoneOffset } = await fetchBillsAndTimezoneOffset({
         timeout,
@@ -138,9 +128,9 @@ async function main(options) {
 
     console.log(`Generating ${fileFormatUpper}...`);
 
-    const charges = bills.reduce((charges, bill) => charges.concat(bill.line_items.map(i => asCharge(i, bill.state, timezoneOffset, detailed))), []).filter(charge => isBetween(charge.date.date, since, until, charge.billState));
+    const charges = bills.reduce((charges, bill) => charges.concat(bill.line_items.map(i => asCharge(i, bill.state, timezoneOffset))), []).filter(charge => dateFilter(charge.date.date, charge.billState));
 
-    const output = json ? JSON.stringify(charges, null, 2) : generateOfx(charges, detailed);
+    const output = json ? JSON.stringify(charges, null, 2) : generateOfx(charges);
 
     const outputPath = requestedOutputPath !== null ? requestedOutputPath : defaultOutputPath(bills, fileFormat);
 
@@ -183,31 +173,6 @@ async function fetchBillsAndTimezoneOffset({ username, password, timeout, headle
         return { bills, timezoneOffset };
     } finally {
         await browser.close();
-    }
-}
-
-// FIXME: This is stupidly unoptimized: we're parsing sinceDate and untilDate
-// for each item, and we're mixing both dates and 'forever', 'open', etc.
-// Maybe we could have a factory that takes the static 'since' and 'until' and
-// returns a comparator that can be used as a filter.
-function isBetween(dt, since, until, billState) {
-    if (since === 'forever' && until === 'forever') {
-        return true;
-    } else if (since === 'open' && billState === 'open') {
-        return isBetween(dt, 'forever', until, billState);
-    } else {
-        const sinceDate = parseDate(since);
-        const untilDate = parseDate(until);
-        return (0, _moment2.default)(dt).isBetween(sinceDate, untilDate);
-    }
-}
-
-function parseDate(text) {
-    try {
-        return (0, _moment2.default)(text);
-    } catch (e) {
-        const dt = _chronoNode2.default.parseDate(text);
-        return (0, _moment2.default)(dt);
     }
 }
 
@@ -373,51 +338,31 @@ async function writeToFile(s, path) {
     });
 }
 
-function asCharge(itemData, billState, timezoneOffset, detailed) {
+function asCharge(itemData, billState, timezoneOffset) {
     const {
-        id,
-        title,
         amount,
         post_date: date
     } = itemData;
-    const charge = {
-        id,
+    return _extends({}, itemData, {
         date: { date, timezoneOffset },
-        title,
         amount: (amount / 100).toFixed(2),
         billState
-    };
-    if (detailed) {
-        return _extends({}, itemData, charge);
-    } else {
-        return charge;
-    }
+    });
 }
 
-function ofxItem(itemData, detailed) {
-    const {
-        id,
-        date: {
-            date,
-            timezoneOffset
-        },
-        title,
-        amount
-    } = itemData;
-    const shortid = _shorthash2.default.unique(id);
-    const memo = detailed ? `#${shortid} - ${title}` : title;
+function ofxItem({ id, date: { date, timezoneOffset }, title, amount }) {
     return `
 <STMTTRN>
 <TRNTYPE>DEBIT
 <DTPOSTED>${(0, _moment2.default)(date).format('YYYYMMDD')}000000[${timezoneOffset / 60 * -1}:GMT]
 <TRNAMT>${amount * -1}
 <FITID>${id}</FITID>
-<MEMO>${memo}</MEMO>
+<MEMO>${title}</MEMO>
 </STMTTRN>
 `;
 }
 
-function generateOfx(charges, detailed) {
+function generateOfx(charges) {
     return `
 OFXHEADER:100
 DATA:OFXSGML
@@ -456,7 +401,7 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-${charges.map(i => ofxItem(i, detailed)).join('\n')}
+${charges.map(ofxItem).join('\n')}
 </BANKTRANLIST>
 
 </CCSTMTRS>
