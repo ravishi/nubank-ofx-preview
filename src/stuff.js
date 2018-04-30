@@ -32,10 +32,17 @@ function makeUpperDateBoundary(spec) {
 }
 
 function parseDate(text) {
+    // FIXME We should not need to resort to this kind of hackery just to parse our dates. Please improve this.
+    moment.suppressDeprecationWarnings = true;
     try {
-        return moment(text);
-    } catch (e) {
-        const dt = chrono.parseDate(text);
-        return moment(dt);
+        const mt = moment(text);
+        if (mt.isValid()) {
+            return mt;
+        } else {
+            const dt = chrono.parseDate(text);
+            return moment(dt);
+        }
+    } finally {
+        moment.suppressDeprecationWarnings = false;
     }
 }

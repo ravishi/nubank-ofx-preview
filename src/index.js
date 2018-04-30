@@ -69,18 +69,6 @@ const mainCommand = {
             description: 'Output file',
             defaultDescription: './nubank-(hash).ofx',
         })
-        .option('json', {
-            type: 'boolean',
-            alias: 'j',
-            default: false,
-            description: 'Export as JSON. Changes default output to ./nubank-(hash).json',
-        })
-        .option('detailed', {
-            type: 'boolean',
-            alias: 'd',
-            default: false,
-            description: 'Include detailed information',
-        })
         .option('extra', {
             type: 'x',
             array: true,
@@ -106,13 +94,11 @@ void (
 
 async function main(options) {
     const {
-        json,
         extra,
         since,
         until,
         output: requestedOutputPath,
         timeout: timeoutInSeconds,
-        detailed,
         username,
         password: givenPassword,
     } = options;
@@ -123,9 +109,13 @@ async function main(options) {
             : await askForPassword(username)
     );
 
+    const json = extra.includes('for-sync');
+
     const timeout = timeoutInSeconds * 1000;
 
     const headless = !extra.includes('headful');
+
+    const dateFilter = createDateFilter(since, until);
 
     const {bills, timezoneOffset} =
         await fetchBillsAndTimezoneOffset({
@@ -141,12 +131,10 @@ async function main(options) {
 
     console.log(`Generating ${fileFormatUpper}...`);
 
-    const dateFilter = createDateFilter(since, until);
-
     const charges = bills
         .reduce((charges, bill) => charges.concat(
             bill.line_items.map(i =>
-                asCharge(i, bill.state, timezoneOffset, detailed))
+                asCharge(i, bill.state, timezoneOffset))
             ),
             []
         )
@@ -156,7 +144,7 @@ async function main(options) {
 
     const output = (
         json ? JSON.stringify(charges, null, 2)
-            : generateOfx(charges, detailed)
+            : generateOfx(charges)
     );
 
     const outputPath = (
@@ -387,53 +375,32 @@ async function writeToFile(s, path) {
     });
 }
 
-function asCharge(itemData, billState, timezoneOffset, detailed) {
+function asCharge(itemData, billState, timezoneOffset) {
     const {
-        id,
-        title,
         amount,
         post_date: date,
     } = itemData;
-    const charge = {
-        id,
+    return {
+        ...itemData,
         date: {date, timezoneOffset},
-        title,
         amount: (amount / 100).toFixed(2),
         billState,
     };
-    if (detailed) {
-        return {...itemData, ...charge};
-    } else {
-        return charge;
-    }
 }
 
-function ofxItem(itemData, detailed) {
-    const {
-        id,
-        date: {
-            date,
-            timezoneOffset
-        },
-        title,
-        amount,
-    } = itemData;
-    const shortid = sh.unique(id);
-    const memo = (
-        detailed ? `#${shortid} - ${title}` : title
-    );
+function ofxItem({id, date: {date, timezoneOffset}, title, amount}) {
     return `
 <STMTTRN>
 <TRNTYPE>DEBIT
 <DTPOSTED>${moment(date).format('YYYYMMDD')}000000[${timezoneOffset / 60 * -1}:GMT]
 <TRNAMT>${amount * -1}
 <FITID>${id}</FITID>
-<MEMO>${memo}</MEMO>
+<MEMO>${title}</MEMO>
 </STMTTRN>
 `;
 }
 
-function generateOfx(charges, detailed) {
+function generateOfx(charges) {
     return `
 OFXHEADER:100
 DATA:OFXSGML
@@ -472,7 +439,7 @@ NEWFILEUID:NONE
 </CCACCTFROM>
 
 <BANKTRANLIST>
-${charges.map(i => ofxItem(i, detailed)).join('\n')}
+${charges.map(ofxItem).join('\n')}
 </BANKTRANLIST>
 
 </CCSTMTRS>

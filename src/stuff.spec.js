@@ -31,4 +31,19 @@ describe('date filter', () => {
 
         void expect(r).to.be.true;
     });
+
+    it('should work for open bills (forever, now)', () => {
+        const filter = createDateFilter('forever', 'now');
+
+        let r = filter('1900-01-01', 'whatever');
+        void expect(r).to.be.true;
+
+        const today = moment().format('YYYY-MM-DD');
+        r = filter(today, 'open');
+        void expect(r).to.be.true;
+
+        const tomorrow = moment().add(1, 'days').format('YYYY-MM-DD');
+        r = filter(tomorrow, 'open');
+        void expect(r).to.be.false;
+    });
 });
