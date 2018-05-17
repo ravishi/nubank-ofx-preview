@@ -8,6 +8,7 @@ import inquirer from 'inquirer';
 import puppeteer from 'puppeteer';
 import objectHash from 'object-hash';
 
+import NuBank from './api';
 import {createDateFilter} from "./stuff";
 
 function handleError({extra}, error) {
@@ -109,21 +110,89 @@ async function main(options) {
             : await askForPassword(username)
     );
 
+    const api = await NuBank.discover();
+
+    let links, results, accessToken;
+    try {
+        const {
+            links: cachedLinks,
+            results: cachedResults,
+            accessToken: cachedAccessToken
+        } = JSON.parse(fs.readFileSync('./cached-data.json'));
+        links = cachedLinks;
+        results = cachedResults;
+        accessToken = cachedAccessToken;
+    } catch (e) {
+        const {
+            _links: apiLinks,
+            access_token: freshAccessToken,
+        } = await api.login({username, password});
+        links = apiLinks;
+        results = {};
+        accessToken = freshAccessToken;
+    }
+
+    const cacheData = {
+        links,
+        results,
+        accessToken,
+    };
+
+    const {
+        customer: {
+            customer: {
+                _links: {
+                    accounts: {
+                        href: accountsLink,
+                    },
+                },
+            },
+        },
+    } = results;
+
+    links['customer.accounts'] = {href: accountsLink};
+
+    const keys = Object.keys(links);
+    const ignoredKeys = [
+        'revoke_token',
+        'change_password',
+        'revoke_token',
+        'user_change_password'
+    ];
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (key.includes('revoke') || ignoredKeys.includes(key)) {
+            console.log(`Ignoring ${key}...`);
+            continue;
+        }
+        if (results[key]) {
+            console.log(`Skipping ${key}: already cached`);
+            continue;
+        }
+        await (async () => {
+            const link = links[key].href;
+            console.log(`Fetching ${key}...`);
+            try {
+                cacheData.results[key] = await api.fetch(link, accessToken);
+            } catch (e) {
+                console.error(e);
+            }
+        })();
+    }
+
+    fs.writeFileSync('./cached-data.json', JSON.stringify(cacheData, null, 2));
+
+    return 0;
+
+    const transactions = await api.fetch(eventsLink, accessToken);
+
+    fs.writeFileSync('./transactions.json', JSON.stringify(transactions, null, 2));
+
     const json = extra.includes('for-sync');
 
     const timeout = timeoutInSeconds * 1000;
 
-    const headless = !extra.includes('headful');
-
     const dateFilter = createDateFilter(since, until);
-
-    const {bills, timezoneOffset} =
-        await fetchBillsAndTimezoneOffset({
-            timeout,
-            headless,
-            username,
-            password,
-        });
 
     const fileFormat = (json ? 'json' : 'ofx');
 
@@ -131,7 +200,7 @@ async function main(options) {
 
     console.log(`Generating ${fileFormatUpper}...`);
 
-    const charges = bills
+    const requestedTransactions = transactions
         .reduce((charges, bill) => charges.concat(
             bill.line_items.map(i =>
                 asCharge(i, bill.state, timezoneOffset))
@@ -143,8 +212,8 @@ async function main(options) {
         ));
 
     const output = (
-        json ? JSON.stringify(charges, null, 2)
-            : generateOfx(charges)
+        json ? JSON.stringify(requestedTransactions, null, 2)
+            : generateOfx(requestedTransactions)
     );
 
     const outputPath = (
