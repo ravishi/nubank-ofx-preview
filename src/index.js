@@ -117,6 +117,7 @@ async function main(options) {
 
     const dateFilter = createDateFilter(since, until);
 
+    /*
     const {bills, timezoneOffset} =
         await fetchBillsAndTimezoneOffset({
             timeout,
@@ -124,6 +125,19 @@ async function main(options) {
             username,
             password,
         });
+        */
+
+    const bills = JSON.parse(fs.readFileSync('./bill.json')).flatMap(item => {
+        if (typeof item.bill !== 'undefined') {
+            return [item.bill];
+        } else if (item.bills !== 'undefined') {
+            return item.bills;
+        } else {
+            return [];
+        }
+    });
+
+    const timezoneOffset = 180;
 
     const fileFormat = (json ? 'json' : 'ofx');
 
@@ -167,32 +181,6 @@ async function askForPassword(username) {
         message: `Please enter a password for user "${username}"`,
     }]);
     return password;
-}
-
-async function fetchBillsAndTimezoneOffset({username, password, timeout, headless}) {
-    const browser = await puppeteer.launch({headless});
-    try {
-        const page = await browser.newPage();
-
-        page.setDefaultNavigationTimeout(timeout);
-
-        console.log('Logging in...');
-
-        const result = await login(page, username, password, timeout);
-        if (result.error) {
-            throw new Error(`Login failed: ${result.error}`);
-        }
-
-        console.log('Fetching bills...');
-
-        const bills = await fetchBills(page, timeout);
-
-        const timezoneOffset = await page.evaluate(() => new Date().getTimezoneOffset());
-
-        return {bills, timezoneOffset};
-    } finally {
-        await browser.close();
-    }
 }
 
 function defaultOutputPath(bills, format) {
@@ -260,8 +248,17 @@ async function fetchBills(page, timeout) {
 
     const onResponse = async (response) => {
         const data = await response.json().catch(() => null);
-        if (data && data.bill) {
-            bills.push(data.bill);
+        console.log(data);
+        if (data) {
+            if (data.bill) {
+                bills.push(data.bill);
+            } else if (data.bills) {
+                data.bills.forEach(b => {
+                    if (b.line_items) {
+                        bills.push(b)
+                    }
+                })
+            }
         }
     };
 

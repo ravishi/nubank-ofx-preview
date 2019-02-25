@@ -13,7 +13,8 @@ function makeLowerDateBoundary(spec) {
     if (spec === 'forever') {
         return () => true;
     } else if (spec === 'open') {
-        return (dt, billState) => billState === 'open';
+        const today = parseDate('today');
+        return (dt, billState) => moment(dt).isSameOrAfter(today) || billState === 'open';
     } else {
         const specDate = parseDate(spec);
         return (dt) => moment(dt).isSameOrAfter(specDate);
@@ -24,7 +25,8 @@ function makeUpperDateBoundary(spec) {
     if (spec === 'forever') {
         return () => true;
     } else if (spec === 'open') {
-        return (dt, billState) => billState === 'open';
+        const today = parseDate('today');
+        return (dt, billState) => moment(dt).isSameOrBefore(today) || billState === 'open';
     } else {
         const specDate = parseDate(spec);
         return (dt) => moment(dt).isBefore(specDate);
